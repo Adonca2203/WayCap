@@ -57,8 +57,8 @@ impl FfmpegEncoder {
     ) -> Result<Self, ffmpeg::Error> {
         let _ = ffmpeg::init();
 
-        let encoder_codec =
-            ffmpeg::codec::encoder::find(Id::H264).ok_or(ffmpeg::Error::EncoderNotFound)?;
+        let encoder_codec = ffmpeg::codec::encoder::find_by_name("h264_nvenc")
+            .ok_or(ffmpeg::Error::EncoderNotFound)?;
 
         debug!("Setting codec context");
         let mut encoder_ctx = ffmpeg::codec::context::Context::new_with_codec(encoder_codec)
