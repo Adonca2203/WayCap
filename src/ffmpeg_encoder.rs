@@ -6,7 +6,6 @@ use std::{
 use anyhow::Result;
 use ffmpeg_next::{
     self as ffmpeg,
-    codec::Id,
     software::scaling::{Context as Scaler, Flags},
     Rational,
 };
