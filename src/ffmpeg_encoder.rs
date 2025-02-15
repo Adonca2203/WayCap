@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    time::{Duration, SystemTime},
-};
+use std::collections::VecDeque;
 
 use anyhow::Result;
 use ffmpeg_next::{
@@ -15,31 +12,24 @@ pub struct FfmpegEncoder {
     encoder: ffmpeg::codec::encoder::Video,
     pub buffer: VecDeque<FrameData>,
     max_frames: usize,
-    start_time: SystemTime,
 }
 
 #[derive(Clone, Debug)]
 pub struct FrameData {
     frame_bytes: Vec<u8>,
-    pts: i64, // Presentation Time Scale
-    dts: i64, // Decode Time Scale (Should be the same as pts unless we want to be fancy)
+    time: i64,
 }
 
 impl FrameData {
     fn new() -> Self {
         Self {
             frame_bytes: Vec::new(),
-            pts: 0,
-            dts: 0,
+            time: 0,
         }
     }
 
-    fn set_pts(&mut self, pts: i64) {
-        self.pts = pts;
-    }
-
-    fn set_dts(&mut self, dts: i64) {
-        self.dts = dts;
+    fn set_time(&mut self, time: i64) {
+        self.time = time;
     }
 
     fn set_frame_bytes(&mut self, frame_bytes: Vec<u8>) {
@@ -67,9 +57,9 @@ impl FfmpegEncoder {
         encoder_ctx.set_width(width);
         encoder_ctx.set_height(height);
         encoder_ctx.set_format(ffmpeg::format::Pixel::NV12);
-        encoder_ctx.set_frame_rate(Some(fps as f64));
+        encoder_ctx.set_frame_rate(Some(Rational::new(fps as i32, 1)));
         encoder_ctx.set_bit_rate(5_000_000);
-        encoder_ctx.set_time_base(Rational::new(1, fps as i32));
+        encoder_ctx.set_time_base(Rational::new(1, fps as i32 * 1000));
 
         let encoder_params = ffmpeg::codec::Parameters::new();
 
@@ -81,19 +71,10 @@ impl FfmpegEncoder {
             encoder,
             buffer: VecDeque::new(),
             max_frames: (buffer_seconds * fps) as usize,
-            start_time: SystemTime::now(),
         })
     }
 
-    pub fn process_frame(&mut self, frame: &[u8]) -> Result<(), ffmpeg::Error> {
-        debug!(
-            "Frame received: {} bytes, expected: {} bytes",
-            frame.len(),
-            self.encoder.width() * self.encoder.height() * 4
-        );
-        debug!("Processing frame");
-
-        debug!("Trying to convert BGRx to NV12");
+    pub fn process_frame(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
         let mut scaler = Scaler::get(
             ffmpeg_next::format::Pixel::BGRA,
             self.encoder.width(),
@@ -104,27 +85,8 @@ impl FfmpegEncoder {
             Flags::BILINEAR,
         )?;
 
-        let elapsed_millis = self
-            .start_time
-            .elapsed()
-            .unwrap_or(Duration::ZERO)
-            .as_millis() as i64;
-
-        let pts_step = (elapsed_millis * self.encoder.time_base().denominator() as i64) / 1_000;
-
-        let pts = if let Some(prev_frame) = self.buffer.back() {
-            if pts_step > prev_frame.pts {
-                pts_step
-            } else {
-                prev_frame.pts + pts_step
-            }
-        } else {
-            pts_step
-        };
-
         let mut frame_data = FrameData::new();
-        frame_data.set_pts(pts);
-        frame_data.set_dts(pts);
+        frame_data.set_time(time_micro);
 
         let mut src_frame = ffmpeg::util::frame::video::Video::new(
             ffmpeg_next::format::Pixel::BGRA,
@@ -132,7 +94,7 @@ impl FfmpegEncoder {
             self.encoder.height(),
         );
 
-        src_frame.set_pts(Some(pts));
+        src_frame.set_pts(Some(time_micro));
 
         src_frame.data_mut(0).copy_from_slice(frame);
 
@@ -143,12 +105,12 @@ impl FfmpegEncoder {
             self.encoder.height(),
         );
 
-        dst_frame.set_pts(Some(pts));
+        dst_frame.set_pts(Some(time_micro));
 
-        debug!("Converting...");
+        // debug!("Converting...");
         scaler.run(&src_frame, &mut dst_frame)?;
 
-        debug!("Sending frame to encoder");
+        // debug!("Sending frame to encoder");
         self.encoder.send_frame(&dst_frame)?;
 
         let mut packet = ffmpeg::codec::packet::Packet::empty();
@@ -173,15 +135,12 @@ impl FfmpegEncoder {
         let buffer_clone = &self.buffer.clone();
 
         let codec = self.encoder.codec().unwrap();
-        debug!("Attemting to save {}.", filename);
-        debug!("Using codec {:?}", codec.name());
         let mut output = ffmpeg::format::output(&filename)?;
         let mut stream = output.add_stream(codec)?;
         stream.set_rate(self.encoder.frame_rate());
         stream.set_time_base(self.encoder.time_base());
         stream.set_parameters(&self.encoder);
 
-        debug!("Writing header");
         if let Err(err) = output.write_header() {
             debug!(
                 "Ran into the following error while writing header: {:?}",
@@ -190,14 +149,14 @@ impl FfmpegEncoder {
             return Err(err);
         }
 
-        for (frame_number, frame) in buffer_clone.iter().enumerate() {
-            debug!(
-                "Writing frame {} to buffer, with pts {}",
-                frame_number, frame.pts
-            );
+        for frame in buffer_clone {
+            let tb = self.encoder.time_base();
+
+            let pts = (frame.time as f64 * tb.denominator() as f64) / 1_000_000.0;
+
             let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.frame_bytes);
-            packet.set_pts(Some(frame.pts));
-            packet.set_dts(Some(frame.dts));
+            packet.set_pts(Some(pts.round() as i64));
+            packet.set_dts(Some(pts.round() as i64));
             packet.set_stream(0);
 
             packet

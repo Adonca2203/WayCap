@@ -1,4 +1,7 @@
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::{
+    os::fd::{FromRawFd, OwnedFd, RawFd},
+    time::SystemTime,
+};
 
 use log::{debug, error, info};
 use pipewire::{
@@ -6,7 +9,7 @@ use pipewire::{
     context::Context,
     main_loop::MainLoop,
     spa::utils::Direction,
-    stream::{Stream, StreamFlags},
+    stream::{Stream, StreamFlags, StreamState},
 };
 use pw::{properties::properties, spa};
 
@@ -21,6 +24,7 @@ pub struct PipewireCapture {
 
 struct UserData {
     format: spa::param::video::VideoInfoRaw,
+    start_time: SystemTime,
 }
 
 impl PipewireCapture {
@@ -30,18 +34,17 @@ impl PipewireCapture {
         callback: F,
     ) -> Result<Self, pipewire::Error>
     where
-        F: Fn(Vec<u8>) + Send + 'static,
+        F: Fn(Vec<u8>, i64) + Send + 'static,
     {
         pw::init();
         let pw_loop = MainLoop::new(None)?;
         let pw_context = Context::new(&pw_loop)?;
         let core = pw_context.connect_fd(unsafe { OwnedFd::from_raw_fd(pipewire_fd) }, None)?;
 
-        let mut data = UserData {
+        let data = UserData {
             format: Default::default(),
+            start_time: SystemTime::now(),
         };
-
-        data.format.set_format(spa::param::video::VideoFormat::YUY2);
 
         let _listener = core
             .add_listener_local()
@@ -56,14 +59,20 @@ impl PipewireCapture {
             properties! {
                 *pw::keys::MEDIA_TYPE => "Video",
                 *pw::keys::MEDIA_CATEGORY => "Capture",
-                *pw::keys::MEDIA_ROLE => "Screen"
+                *pw::keys::MEDIA_ROLE => "Screen",
             },
         )?;
         debug!("Stream: {0:?}", stream);
 
         let _stream_listener = stream
             .add_local_listener_with_user_data(data)
-            .state_changed(|_, _, old, new| debug!("State changed: {0:?} -> {1:?}", old, new))
+            .state_changed(|_, udata, old, new| {
+                debug!("State changed: {0:?} -> {1:?}", old, new);
+
+                if new == StreamState::Streaming {
+                    udata.start_time = SystemTime::now();
+                }
+            })
             .param_changed(|_, user_data, id, param| {
                 let Some(param) = param else {
                     return;
@@ -89,7 +98,6 @@ impl PipewireCapture {
                     .parse(param)
                     .expect("Faield to parse param");
 
-                println!("got video format:");
                 println!(
                     "  format: {} ({:?})",
                     user_data.format.format().as_raw(),
@@ -106,10 +114,16 @@ impl PipewireCapture {
                     user_data.format.framerate().denom
                 );
             })
-            .process(move |stream, _| {
+            .process(move |stream, udata| {
                 match stream.dequeue_buffer() {
                     None => println!("out of buffers"),
                     Some(mut buffer) => {
+                        let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
+                            elapsed.as_micros() as i64
+                        } else {
+                            0
+                        };
+
                         let datas = buffer.datas_mut();
                         if datas.is_empty() {
                             return;
@@ -117,9 +131,7 @@ impl PipewireCapture {
 
                         // copy frame data to screen
                         let data = &mut datas[0];
-                        println!("got a frame of size {}", data.chunk().size());
-
-                        callback(data.data().unwrap().to_vec());
+                        callback(data.data().unwrap().to_vec(), time_ms);
                     }
                 }
             })
@@ -143,7 +155,7 @@ impl PipewireCapture {
                 Choice,
                 Enum,
                 Id,
-                pw::spa::param::video::VideoFormat::YUY2,
+                pw::spa::param::video::VideoFormat::xRGB,
                 pw::spa::param::video::VideoFormat::RGB,
                 pw::spa::param::video::VideoFormat::RGB,
                 pw::spa::param::video::VideoFormat::RGBA,
@@ -174,9 +186,9 @@ impl PipewireCapture {
                 Choice,
                 Range,
                 Fraction,
-                pw::spa::utils::Fraction { num: 60, denom: 1 }, // Default
-                pw::spa::utils::Fraction { num: 0, denom: 1 },  // Min
-                pw::spa::utils::Fraction { num: 144, denom: 1 }  // Max
+                pw::spa::utils::Fraction { num: 240, denom: 1 }, // Default
+                pw::spa::utils::Fraction { num: 0, denom: 1 },   // Min
+                pw::spa::utils::Fraction { num: 244, denom: 1 }  // Max
             ),
         );
 

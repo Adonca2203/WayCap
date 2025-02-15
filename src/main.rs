@@ -17,7 +17,7 @@ async fn main() -> Result<(), Error> {
 
     let width = 2560;
     let height = 1440;
-    let fps = 60;
+    let fps = 144;
     let max_seconds = 300;
 
     let (save_tx, mut save_rx) = mpsc::channel(1);
@@ -42,14 +42,15 @@ async fn main() -> Result<(), Error> {
     let screen_cast = ScreenCast::new()?.start(None)?;
 
     let fd = screen_cast.pipewire_fd();
+    debug!("Stream nodes: {}", screen_cast.streams().count());
     let stream_node = screen_cast.streams().next().unwrap().pipewire_node();
     debug!("Pipewire fd: {}", fd);
 
     std::thread::spawn(move || {
         let encoder_clone = Arc::clone(&encoder_thread);
         debug!("Creating pipewire stream");
-        let _capture = PipewireCapture::new(fd, stream_node, move |frame| {
-            encoder_clone.blocking_lock().process_frame(&frame).unwrap();
+        let _capture = PipewireCapture::new(fd, stream_node, move |frame, time| {
+            encoder_clone.blocking_lock().process_frame(&frame, time).unwrap();
         })
         .unwrap();
     });
