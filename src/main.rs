@@ -17,7 +17,7 @@ async fn main() -> Result<(), Error> {
 
     let width = 2560;
     let height = 1440;
-    let fps = 244;
+    let fps = 144;
     let max_seconds = 300;
 
     let (save_tx, mut save_rx) = mpsc::channel(1);
