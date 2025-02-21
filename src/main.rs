@@ -13,12 +13,12 @@ use zbus::connection;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    simple_logging::log_to_stderr(LevelFilter::Debug);
+    let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
 
     let width = 2560;
     let height = 1440;
-    let fps = 144;
-    let max_seconds = 300;
+    let fps = 60;
+    let max_seconds = 3;
 
     let (save_tx, mut save_rx) = mpsc::channel(1);
     let clip_service = dbus::ClipService::new(save_tx);

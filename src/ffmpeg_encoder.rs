@@ -107,10 +107,8 @@ impl FfmpegEncoder {
 
         dst_frame.set_pts(Some(time_micro));
 
-        // debug!("Converting...");
         scaler.run(&src_frame, &mut dst_frame)?;
 
-        // debug!("Sending frame to encoder");
         self.encoder.send_frame(&dst_frame)?;
 
         let mut packet = ffmpeg::codec::packet::Packet::empty();
@@ -149,10 +147,11 @@ impl FfmpegEncoder {
             return Err(err);
         }
 
+        let first_frame_offset = buffer_clone.front().unwrap().time;
         for frame in buffer_clone {
             let tb = self.encoder.time_base();
-
-            let pts = (frame.time as f64 * tb.denominator() as f64) / 1_000_000.0;
+            let offset = frame.time - first_frame_offset;
+            let pts = (offset as f64 * tb.denominator() as f64) / 1_000_000.0;
 
             let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.frame_bytes);
             packet.set_pts(Some(pts.round() as i64));

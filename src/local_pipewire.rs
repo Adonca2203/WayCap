@@ -98,17 +98,17 @@ impl PipewireCapture {
                     .parse(param)
                     .expect("Faield to parse param");
 
-                println!(
+                debug!(
                     "  format: {} ({:?})",
                     user_data.format.format().as_raw(),
                     user_data.format.format()
                 );
-                println!(
+                debug!(
                     "  size: {}x{}",
                     user_data.format.size().width,
                     user_data.format.size().height
                 );
-                println!(
+                debug!(
                     "  framerate: {}/{}",
                     user_data.format.framerate().num,
                     user_data.format.framerate().denom
@@ -116,7 +116,7 @@ impl PipewireCapture {
             })
             .process(move |stream, udata| {
                 match stream.dequeue_buffer() {
-                    None => println!("out of buffers"),
+                    None => debug!("out of buffers"),
                     Some(mut buffer) => {
                         let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
                             elapsed.as_micros() as i64
