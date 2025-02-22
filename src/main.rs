@@ -15,10 +15,12 @@ use zbus::connection;
 async fn main() -> Result<(), Error> {
     let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
 
+    // TODO: Grab these dynamically based on screen picked
+    // with screencast portal?
     let width = 2560;
     let height = 1440;
-    let fps = 60;
-    let max_seconds = 3;
+    let fps = 240;
+    let max_seconds = 300;
 
     let (save_tx, mut save_rx) = mpsc::channel(1);
     let clip_service = dbus::ClipService::new(save_tx);
