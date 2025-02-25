@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Error, Result};
 use local_pipewire::PipewireCapture;
 use log::{debug, LevelFilter};
-use portal_screencast::ScreenCast;
+use portal_screencast::{ScreenCast, SourceType};
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
 
@@ -41,7 +41,10 @@ async fn main() -> Result<(), Error> {
         .await?;
 
     debug!("Selecting screen to record");
-    let screen_cast = ScreenCast::new()?.start(None)?;
+    let mut screen_cast = ScreenCast::new()?;
+    screen_cast.set_source_types(SourceType::MONITOR);
+
+    let screen_cast = screen_cast.start(None)?;
 
     let fd = screen_cast.pipewire_fd();
     debug!("Stream nodes: {}", screen_cast.streams().count());

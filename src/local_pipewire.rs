@@ -8,8 +8,11 @@ use pipewire::{
     self as pw,
     context::Context,
     main_loop::MainLoop,
-    spa::utils::Direction,
-    stream::{Stream, StreamFlags, StreamState},
+    spa::{
+        param::format::{MediaSubtype, MediaType},
+        utils::Direction,
+    },
+    stream::{Stream, StreamFlags},
 };
 use pw::{properties::properties, spa};
 
@@ -22,8 +25,11 @@ pub struct PipewireCapture {
     main_loop: MainLoop,
 }
 
+#[derive(Clone, Copy)]
 struct UserData {
-    format: spa::param::video::VideoInfoRaw,
+    video_format: spa::param::video::VideoInfoRaw,
+    audio_format: spa::param::audio::AudioInfoRaw,
+    cursor_move: bool,
     start_time: SystemTime,
 }
 
@@ -42,7 +48,9 @@ impl PipewireCapture {
         let core = pw_context.connect_fd(unsafe { OwnedFd::from_raw_fd(pipewire_fd) }, None)?;
 
         let data = UserData {
-            format: Default::default(),
+            video_format: Default::default(),
+            audio_format: Default::default(),
+            cursor_move: false,
             start_time: SystemTime::now(),
         };
 
@@ -53,25 +61,21 @@ impl PipewireCapture {
             .done(|d, _| info!("DONE: {0}", d))
             .register();
 
-        let stream = Stream::new(
+        // Set up video stream
+        let video_stream = Stream::new(
             &core,
-            "test-screencap",
+            "auto-screen-recorder-video",
             properties! {
                 *pw::keys::MEDIA_TYPE => "Video",
                 *pw::keys::MEDIA_CATEGORY => "Capture",
                 *pw::keys::MEDIA_ROLE => "Screen",
             },
         )?;
-        debug!("Stream: {0:?}", stream);
 
-        let _stream_listener = stream
+        let _video_stream_listener = video_stream
             .add_local_listener_with_user_data(data)
-            .state_changed(|_, udata, old, new| {
-                debug!("State changed: {0:?} -> {1:?}", old, new);
-
-                if new == StreamState::Streaming {
-                    udata.start_time = SystemTime::now();
-                }
+            .state_changed(|_, _, old, new| {
+                debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
             })
             .param_changed(|_, user_data, id, param| {
                 let Some(param) = param else {
@@ -94,24 +98,24 @@ impl PipewireCapture {
                 }
 
                 user_data
-                    .format
+                    .video_format
                     .parse(param)
                     .expect("Faield to parse param");
 
                 debug!(
                     "  format: {} ({:?})",
-                    user_data.format.format().as_raw(),
-                    user_data.format.format()
+                    user_data.video_format.format().as_raw(),
+                    user_data.video_format.format()
                 );
                 debug!(
                     "  size: {}x{}",
-                    user_data.format.size().width,
-                    user_data.format.size().height
+                    user_data.video_format.size().width,
+                    user_data.video_format.size().height
                 );
                 debug!(
                     "  framerate: {}/{}",
-                    user_data.format.framerate().num,
-                    user_data.format.framerate().denom
+                    user_data.video_format.framerate().num,
+                    user_data.video_format.framerate().denom
                 );
             })
             .process(move |stream, udata| {
@@ -129,7 +133,7 @@ impl PipewireCapture {
                             return;
                         }
 
-                        // copy frame data to screen
+                        // send frame data to encoder
                         let data = &mut datas[0];
                         callback(data.data().unwrap().to_vec(), time_ms);
                     }
@@ -137,7 +141,7 @@ impl PipewireCapture {
             })
             .register()?;
 
-        let obj = pw::spa::pod::object!(
+        let video_spa_obj = pw::spa::pod::object!(
             pw::spa::utils::SpaTypes::ObjectParamFormat,
             pw::spa::param::ParamType::EnumFormat,
             pw::spa::pod::property!(
@@ -192,24 +196,143 @@ impl PipewireCapture {
             ),
         );
 
-        let values: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
+        let video_spa_values: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
             std::io::Cursor::new(Vec::new()),
-            &pw::spa::pod::Value::Object(obj),
+            &pw::spa::pod::Value::Object(video_spa_obj),
         )
         .unwrap()
         .0
         .into_inner();
 
-        let mut params = [Pod::from_bytes(&values).unwrap()];
+        let mut video_params = [Pod::from_bytes(&video_spa_values).unwrap()];
 
-        stream.connect(
+        video_stream.connect(
             Direction::Input,
             Some(stream_node),
             StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
-            &mut params,
+            &mut video_params,
         )?;
 
-        debug!("Stream: {0:?}", stream);
+        debug!("Video Stream: {0:?}", video_stream);
+
+        // Audio Stream
+        let audio_stream = pw::stream::Stream::new(
+            &core,
+            "auto-screen-recorder-audio",
+            properties! {
+                *pw::keys::MEDIA_TYPE => "Audio",
+                *pw::keys::MEDIA_CATEGORY => "Capture",
+                *pw::keys::MEDIA_ROLE => "Music",
+            },
+        )?;
+
+        let _audio_stream_listener = audio_stream
+            .add_local_listener_with_user_data(data)
+            .state_changed(|_, _, old, new| {
+                debug!("Audio Stream State Changed: {0:?} -> {1:?}", old, new);
+            })
+            .param_changed(|_, udata, id, param| {
+                let Some(param) = param else {
+                    return;
+                };
+                if id != pw::spa::param::ParamType::Format.as_raw() {
+                    return;
+                }
+
+                let (media_type, media_subtype) =
+                    match pw::spa::param::format_utils::parse_format(param) {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+
+                // only accept raw audio
+                if media_type != MediaType::Audio || media_subtype != MediaSubtype::Raw {
+                    return;
+                }
+
+                udata
+                    .audio_format
+                    .parse(param)
+                    .expect("Failed to parse audio params");
+
+                debug!(
+                    "Capturing Rate:{} channels:{}",
+                    udata.audio_format.rate(),
+                    udata.audio_format.channels()
+                );
+            })
+            .process(|stream, udata| match stream.dequeue_buffer() {
+                None => debug!("Out of audio buffers"),
+                Some(mut buffer) => {
+                    let datas = buffer.datas_mut();
+                    if datas.is_empty() {
+                        return;
+                    }
+
+                    let data = &mut datas[0];
+                    let n_channels = udata.audio_format.channels();
+                    let n_samples = data.chunk().size() / (std::mem::size_of::<f32>() as u32);
+
+                    if let Some(samples) = data.data() {
+                        if udata.cursor_move {
+                            debug!("\x1B[{}A", n_channels + 1);
+                        }
+
+                        debug!("Captured {} samples", n_samples / n_channels);
+
+                        for c in 0..n_channels {
+                            let mut max: f32 = 0.0;
+
+                            for n in (c..n_samples).step_by(n_channels as usize) {
+                                let start = n as usize * std::mem::size_of::<f32>();
+                                let end = start + std::mem::size_of::<f32>();
+                                let chan = &samples[start..end];
+                                let f = f32::from_le_bytes(chan.try_into().unwrap());
+                                max = max.max(f.abs());
+                            }
+
+                            let peak = ((max * 30.0) as usize).clamp(0, 39);
+
+                            debug!(
+                                "channel {}: |{:>w1$}{:w2$}| peak:{}",
+                                c,
+                                "*",
+                                "",
+                                max,
+                                w1 = peak + 1,
+                                w2 = 40 - peak
+                            );
+                        }
+
+                        udata.cursor_move = true;
+                    }
+                }
+            })
+            .register()?;
+
+        let mut audio_info = pw::spa::param::audio::AudioInfoRaw::new();
+        audio_info.set_format(pw::spa::param::audio::AudioFormat::F32LE);
+        let audio_spa_obj = pw::spa::pod::Object {
+            type_: pw::spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+            id: pw::spa::param::ParamType::EnumFormat.as_raw(),
+            properties: audio_info.into(),
+        };
+
+        let audio_spa_values: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
+            std::io::Cursor::new(Vec::new()),
+            &pw::spa::pod::Value::Object(audio_spa_obj),
+        )
+        .unwrap()
+        .0
+        .into_inner();
+
+        let mut audio_params = [Pod::from_bytes(&audio_spa_values).unwrap()];
+        audio_stream.connect(
+            Direction::Input,
+            Some(stream_node),
+            StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
+            &mut audio_params,
+        )?;
 
         pw_loop.run();
 

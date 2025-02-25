@@ -1120,9 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "portal-screencast"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b53237cc1033c6a3bb19941faf30b270939368a8ae6a56dc62446eea49143486"
+version = "0.1.1"
 dependencies = [
  "bitflags 1.3.2",
  "dbus",
