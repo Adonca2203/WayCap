@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.95"
+bytemuck = "1.21.0"
 chrono = "0.4.39"
 ffmpeg-next = { version = "7.1.0", features = ["codec", "format"] }
 log = "0.4.25"

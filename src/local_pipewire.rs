@@ -29,28 +29,29 @@ pub struct PipewireCapture {
 struct UserData {
     video_format: spa::param::video::VideoInfoRaw,
     audio_format: spa::param::audio::AudioInfoRaw,
-    cursor_move: bool,
     start_time: SystemTime,
 }
 
 impl PipewireCapture {
-    pub fn new<F>(
+    pub fn new<F1, F2>(
         pipewire_fd: RawFd,
         stream_node: u32,
-        callback: F,
+        process_video_callback: F1,
+        process_audio_callback: F2,
     ) -> Result<Self, pipewire::Error>
     where
-        F: Fn(Vec<u8>, i64) + Send + 'static,
+        F1: Fn(Vec<u8>, i64) + Send + 'static,
+        F2: Fn(Vec<u8>, i64) + Send + 'static,
     {
         pw::init();
         let pw_loop = MainLoop::new(None)?;
         let pw_context = Context::new(&pw_loop)?;
         let core = pw_context.connect_fd(unsafe { OwnedFd::from_raw_fd(pipewire_fd) }, None)?;
+        let audio_core = pw_context.connect(None)?;
 
         let data = UserData {
             video_format: Default::default(),
             audio_format: Default::default(),
-            cursor_move: false,
             start_time: SystemTime::now(),
         };
 
@@ -135,7 +136,7 @@ impl PipewireCapture {
 
                         // send frame data to encoder
                         let data = &mut datas[0];
-                        callback(data.data().unwrap().to_vec(), time_ms);
+                        process_video_callback(data.data().unwrap().to_vec(), time_ms);
                     }
                 }
             })
@@ -217,13 +218,12 @@ impl PipewireCapture {
 
         // Audio Stream
         let audio_stream = pw::stream::Stream::new(
-            &core,
+            &audio_core,
             "auto-screen-recorder-audio",
             properties! {
-                *pw::keys::MEDIA_TYPE => "Audio",
-                *pw::keys::MEDIA_CATEGORY => "Capture",
-                *pw::keys::MEDIA_ROLE => "Music",
-            },
+            *pw::keys::MEDIA_TYPE => "Audio",
+            *pw::keys::MEDIA_CATEGORY => "Capture",
+            *pw::keys::MEDIA_ROLE => "Music", },
         )?;
 
         let _audio_stream_listener = audio_stream
@@ -256,12 +256,13 @@ impl PipewireCapture {
                     .expect("Failed to parse audio params");
 
                 debug!(
-                    "Capturing Rate:{} channels:{}",
+                    "Capturing Rate:{} channels:{}, format: {}",
                     udata.audio_format.rate(),
-                    udata.audio_format.channels()
+                    udata.audio_format.channels(),
+                    udata.audio_format.format().as_raw()
                 );
             })
-            .process(|stream, udata| match stream.dequeue_buffer() {
+            .process(move |stream, udata| match stream.dequeue_buffer() {
                 None => debug!("Out of audio buffers"),
                 Some(mut buffer) => {
                     let datas = buffer.datas_mut();
@@ -269,42 +270,16 @@ impl PipewireCapture {
                         return;
                     }
 
+                    let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
+                        elapsed.as_micros() as i64
+                    } else {
+                        0
+                    };
+
                     let data = &mut datas[0];
-                    let n_channels = udata.audio_format.channels();
-                    let n_samples = data.chunk().size() / (std::mem::size_of::<f32>() as u32);
 
                     if let Some(samples) = data.data() {
-                        if udata.cursor_move {
-                            debug!("\x1B[{}A", n_channels + 1);
-                        }
-
-                        debug!("Captured {} samples", n_samples / n_channels);
-
-                        for c in 0..n_channels {
-                            let mut max: f32 = 0.0;
-
-                            for n in (c..n_samples).step_by(n_channels as usize) {
-                                let start = n as usize * std::mem::size_of::<f32>();
-                                let end = start + std::mem::size_of::<f32>();
-                                let chan = &samples[start..end];
-                                let f = f32::from_le_bytes(chan.try_into().unwrap());
-                                max = max.max(f.abs());
-                            }
-
-                            let peak = ((max * 30.0) as usize).clamp(0, 39);
-
-                            debug!(
-                                "channel {}: |{:>w1$}{:w2$}| peak:{}",
-                                c,
-                                "*",
-                                "",
-                                max,
-                                w1 = peak + 1,
-                                w2 = 40 - peak
-                            );
-                        }
-
-                        udata.cursor_move = true;
+                        process_audio_callback(samples.to_vec(), time_ms);
                     }
                 }
             })

@@ -52,11 +52,25 @@ async fn main() -> Result<(), Error> {
     debug!("Pipewire fd: {}", fd);
 
     std::thread::spawn(move || {
-        let encoder_clone = Arc::clone(&encoder_thread);
+        let video_encoder_clone = Arc::clone(&encoder_thread);
+        let audio_encoder_clone = Arc::clone(&encoder_thread);
         debug!("Creating pipewire stream");
-        let _capture = PipewireCapture::new(fd, stream_node, move |frame, time| {
-            encoder_clone.blocking_lock().process_frame(&frame, time).unwrap();
-        })
+        let _capture = PipewireCapture::new(
+            fd,
+            stream_node,
+            move |frame, time| {
+                video_encoder_clone
+                    .blocking_lock()
+                    .process_frame(&frame, time)
+                    .unwrap();
+            },
+            move |audio, timestamp| {
+                audio_encoder_clone
+                    .blocking_lock()
+                    .process_audio(&audio, timestamp)
+                    .unwrap();
+            },
+        )
         .unwrap();
     });
 
@@ -64,12 +78,12 @@ async fn main() -> Result<(), Error> {
     loop {
         tokio::select! {
             _ = save_rx.recv() => {
-                let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
-                if encoder.lock().await.buffer.is_empty() {
+                let filename = format!("clip_{}.ogg", chrono::Local::now().timestamp());
+                if encoder.lock().await.video_buffer.is_empty() {
                     debug!("No encoded packets to save!")
                 }
                 else {
-                    encoder.lock().await.save_buffer(&filename)?;
+                    encoder.lock().await.save_audio(&filename)?;
                     debug!("Saved file {}", filename);
                 }
             }

@@ -260,6 +260,7 @@ impl std::ops::Drop for ActiveScreenCast {
 #[derive(Debug)]
 pub struct ScreenCastStream {
     pipewire_node: u32,
+    // Add width and height for the stream to grab dynamically later
     // TODO: other stream metadata.
 }
 
