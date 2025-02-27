@@ -1,11 +1,11 @@
 mod dbus;
 mod ffmpeg_encoder;
-mod local_pipewire;
+mod pipewire_capture;
 
 use std::sync::Arc;
 
 use anyhow::{Error, Result};
-use local_pipewire::PipewireCapture;
+use pipewire_capture::PipewireCapture;
 use log::{debug, LevelFilter};
 use portal_screencast::{ScreenCast, SourceType};
 use tokio::sync::{mpsc, Mutex};
