@@ -15,6 +15,8 @@ pub struct FfmpegEncoder {
     pub audio_buffer: VecDeque<AudioFrameData>,
     max_time: usize,
     keyframe_indexes: Vec<usize>,
+    next_pts: i64,
+    leftover_audio_data: VecDeque<i16>,
 }
 
 #[derive(Clone, Debug)]
@@ -89,6 +91,8 @@ impl FfmpegEncoder {
             max_time: (buffer_seconds as usize * 1_000_000),
             keyframe_indexes: Vec::new(),
             audio_encoder,
+            next_pts: 0,
+            leftover_audio_data: VecDeque::new(),
         })
     }
 
@@ -164,10 +168,15 @@ impl FfmpegEncoder {
         Ok(())
     }
 
-    pub fn process_audio(&mut self, audio: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
-        let audio_f32: &[f32] = bytemuck::cast_slice(audio);
+    pub fn process_audio(
+        &mut self,
+        audio: &[u8],
+        time_micro: i64,
+        samples: u32,
+    ) -> Result<(), ffmpeg::Error> {
+        let audio_i16: &[i16] = bytemuck::cast_slice(audio);
         let n_channels = self.audio_encoder.channels() as usize;
-        let total_samples = audio_f32.len();
+        let total_samples = audio_i16.len();
 
         if total_samples % n_channels != 0 {
             return Err(ffmpeg::Error::InvalidData);
@@ -178,26 +187,20 @@ impl FfmpegEncoder {
 
         let frame_size = self.audio_encoder.frame_size() as usize;
 
-        let time_per_frame = frame_size;
+        self.leftover_audio_data
+            .extend(audio_i16[..samples as usize].iter().copied());
 
-        // Need to figure out how to properly export this getting too long clips
-        let initial_pts =
-            time_micro * self.audio_encoder.time_base().denominator() as i64 / 1_000_000;
-
-        for (i, chunk) in audio_f32.chunks_exact(frame_size).enumerate() {
+        while self.leftover_audio_data.len() >= frame_size {
+            let frame_samples: Vec<i16> = self.leftover_audio_data.drain(..frame_size).collect();
             let mut frame = ffmpeg::frame::Audio::new(
                 self.audio_encoder.format(),
                 frame_size,
                 self.audio_encoder.channel_layout(),
             );
-            frame.plane_mut(0).copy_from_slice(chunk);
 
-            let pts = initial_pts + (i as i64 * time_per_frame as i64);
-            frame_data.set_chunk_time(pts);
-            frame.set_pts(Some(pts));
-
-            debug!("PTS: {}", pts);
-
+            frame.plane_mut(0).copy_from_slice(&frame_samples);
+            frame.set_pts(Some(self.next_pts));
+            frame_data.set_chunk_time(self.next_pts);
             self.audio_encoder.send_frame(&frame)?;
 
             let mut packet = ffmpeg::codec::packet::Packet::empty();
@@ -207,6 +210,8 @@ impl FfmpegEncoder {
                     self.audio_buffer.push_back(frame_data.clone());
                 }
             }
+
+            self.next_pts += 960;
         }
 
         Ok(())
@@ -273,8 +278,9 @@ impl FfmpegEncoder {
         output.write_header()?;
 
         debug!(
-            "Last frame time: {}",
-            audio_buffer_clone.back().unwrap().chunk_time
+            "TOTAL ACTUAL ELAPSED TIME: {}",
+            audio_buffer_clone.back().unwrap().capture_time
+                - audio_buffer_clone.front().unwrap().capture_time
         );
 
         for data in audio_buffer_clone {
@@ -333,10 +339,12 @@ fn create_opus_encoder() -> Result<ffmpeg::codec::encoder::Audio, ffmpeg::Error>
         .audio()?;
 
     encoder_ctx.set_rate(48000);
-    encoder_ctx.set_format(ffmpeg::format::Sample::F32(
+    encoder_ctx.set_bit_rate(128_000);
+    encoder_ctx.set_format(ffmpeg::format::Sample::I16(
         ffmpeg_next::format::sample::Type::Packed,
     ));
     encoder_ctx.set_time_base(Rational::new(1, 48000));
+    encoder_ctx.set_frame_rate(Some(Rational::new(1, 48000)));
     encoder_ctx.set_channel_layout(ffmpeg::channel_layout::ChannelLayout::STEREO);
 
     let mut encoder = encoder_ctx.open()?;

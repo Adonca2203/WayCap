@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     os::fd::{FromRawFd, OwnedFd, RawFd},
     time::SystemTime,
 };
@@ -41,12 +42,13 @@ impl PipewireCapture {
     ) -> Result<Self, pipewire::Error>
     where
         F1: Fn(Vec<u8>, i64) + Send + 'static,
-        F2: Fn(Vec<u8>, i64) + Send + 'static,
+        F2: Fn(Vec<u8>, i64, u32) + Send + 'static,
     {
         pw::init();
         let pw_loop = MainLoop::new(None)?;
         let pw_context = Context::new(&pw_loop)?;
         let core = pw_context.connect_fd(unsafe { OwnedFd::from_raw_fd(pipewire_fd) }, None)?;
+
         let audio_core = pw_context.connect(None)?;
 
         let data = UserData {
@@ -57,7 +59,14 @@ impl PipewireCapture {
 
         let _listener = core
             .add_listener_local()
-            .info(|i| info!("{0:#?}", i))
+            .info(|i| info!("VIDEO CORE:\n{0:#?}", i))
+            .error(|e, f, g, h| error!("{0},{1},{2},{3}", e, f, g, h))
+            .done(|d, _| info!("DONE: {0}", d))
+            .register();
+
+        let _audio_core_listener = audio_core
+            .add_listener_local()
+            .info(|i| info!("AUDIO CORE:\n{0:#?}", i))
             .error(|e, f, g, h| error!("{0},{1},{2},{3}", e, f, g, h))
             .done(|d, _| info!("DONE: {0}", d))
             .register();
@@ -223,7 +232,9 @@ impl PipewireCapture {
             properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CATEGORY => "Capture",
-            *pw::keys::MEDIA_ROLE => "Music", },
+            *pw::keys::MEDIA_ROLE => "Music",
+            *pw::keys::NODE_LATENCY => "960/48000"
+            },
         )?;
 
         let _audio_stream_listener = audio_stream
@@ -277,20 +288,38 @@ impl PipewireCapture {
                     };
 
                     let data = &mut datas[0];
+                    let n_samples = data.chunk().size() / (std::mem::size_of::<i16>()) as u32;
 
                     if let Some(samples) = data.data() {
-                        process_audio_callback(samples.to_vec(), time_ms);
+                        process_audio_callback(samples.to_vec(), time_ms, n_samples);
                     }
                 }
             })
             .register()?;
 
-        let mut audio_info = pw::spa::param::audio::AudioInfoRaw::new();
-        audio_info.set_format(pw::spa::param::audio::AudioFormat::F32LE);
-        let audio_spa_obj = pw::spa::pod::Object {
-            type_: pw::spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
-            id: pw::spa::param::ParamType::EnumFormat.as_raw(),
-            properties: audio_info.into(),
+        let audio_spa_obj = pw::spa::pod::object! {
+            pw::spa::utils::SpaTypes::ObjectParamFormat,
+            pw::spa::param::ParamType::EnumFormat,
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::MediaType,
+                Id,
+                pw::spa::param::format::MediaType::Audio
+                ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::MediaSubtype,
+                Id,
+                pw::spa::param::format::MediaSubtype::Raw
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::AudioFormat,
+                Id,
+                pw::spa::param::audio::AudioFormat::S16LE
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::ParamType::ProcessLatency,
+                Float,
+                960.0
+            )
         };
 
         let audio_spa_values: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
