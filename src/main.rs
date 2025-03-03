@@ -64,10 +64,10 @@ async fn main() -> Result<(), Error> {
                     .process_frame(&frame, time)
                     .unwrap();
             },
-            move |audio, timestamp, samples| {
+            move |audio, timestamp| {
                 audio_encoder_clone
                     .blocking_lock()
-                    .process_audio(&audio, timestamp, samples)
+                    .process_audio(&audio, timestamp)
                     .unwrap();
             },
         )
@@ -78,12 +78,12 @@ async fn main() -> Result<(), Error> {
     loop {
         tokio::select! {
             _ = save_rx.recv() => {
-                let filename = format!("clip_{}.opus", chrono::Local::now().timestamp());
+                let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
                 if encoder.lock().await.video_buffer.is_empty() {
                     debug!("No encoded packets to save!")
                 }
                 else {
-                    encoder.lock().await.save_audio(&filename)?;
+                    encoder.lock().await.save_buffer(&filename)?;
                     debug!("Saved file {}", filename);
                 }
             }

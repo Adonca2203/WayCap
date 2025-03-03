@@ -8,6 +8,9 @@ use ffmpeg_next::{
 };
 use log::debug;
 
+const VIDEO_STREAM: usize = 0;
+const AUDIO_STREAM: usize = 1;
+
 pub struct FfmpegEncoder {
     video_encoder: ffmpeg::codec::encoder::Video,
     audio_encoder: ffmpeg::codec::encoder::Audio,
@@ -168,12 +171,7 @@ impl FfmpegEncoder {
         Ok(())
     }
 
-    pub fn process_audio(
-        &mut self,
-        audio: &[u8],
-        time_micro: i64,
-        samples: u32,
-    ) -> Result<(), ffmpeg::Error> {
+    pub fn process_audio(&mut self, audio: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
         let audio_i16: &[i16] = bytemuck::cast_slice(audio);
         let n_channels = self.audio_encoder.channels() as usize;
         let total_samples = audio_i16.len();
@@ -187,8 +185,7 @@ impl FfmpegEncoder {
 
         let frame_size = self.audio_encoder.frame_size() as usize;
 
-        self.leftover_audio_data
-            .extend(audio_i16[..samples as usize].iter().copied());
+        self.leftover_audio_data.extend(audio_i16);
 
         while self.leftover_audio_data.len() >= frame_size {
             let frame_samples: Vec<i16> = self.leftover_audio_data.drain(..frame_size).collect();
@@ -219,22 +216,21 @@ impl FfmpegEncoder {
 
     pub fn save_buffer(&mut self, filename: &str) -> Result<(), ffmpeg::Error> {
         let video_buffer_clone = &self.video_buffer.clone();
-        let audio_buffer_clone = &self.audio_buffer.clone();
-        if let Some(newest_video) = video_buffer_clone.back() {
-            if let Some(newest_audio) = audio_buffer_clone.back() {
-                debug!(
-                    "Newest Vid TS: {}, Audio TS: {}",
-                    newest_video.time, newest_audio.capture_time
-                );
-            }
-        }
+        let mut audio_buffer_clone = self.audio_buffer.clone();
 
-        let codec = self.video_encoder.codec().unwrap();
         let mut output = ffmpeg::format::output(&filename)?;
-        let mut stream = output.add_stream(codec)?;
-        stream.set_rate(self.video_encoder.frame_rate());
-        stream.set_time_base(self.video_encoder.time_base());
-        stream.set_parameters(&self.video_encoder);
+
+        let video_codec = self.video_encoder.codec().unwrap();
+        let mut video_stream = output.add_stream(video_codec)?;
+        video_stream.set_rate(self.video_encoder.frame_rate());
+        video_stream.set_time_base(self.video_encoder.time_base());
+        video_stream.set_parameters(&self.video_encoder);
+
+        let audio_codec = self.audio_encoder.codec().unwrap();
+        let mut audio_stream = output.add_stream(audio_codec)?;
+        audio_stream.set_rate(self.audio_encoder.frame_rate());
+        audio_stream.set_time_base(self.audio_encoder.time_base());
+        audio_stream.set_parameters(&self.audio_encoder);
 
         if let Err(err) = output.write_header() {
             debug!(
@@ -244,6 +240,27 @@ impl FfmpegEncoder {
             return Err(err);
         }
 
+        // Align audio buffer timestamp to video buffer
+        while let Some(audio_frame) = audio_buffer_clone.front() {
+            if let Some(video_frame) = video_buffer_clone.front() {
+                if audio_frame.capture_time < video_frame.time {
+                    audio_buffer_clone.pop_front();
+                    continue;
+                }
+            }
+            break;
+        }
+
+        if let Some(newest_video) = video_buffer_clone.front() {
+            if let Some(newest_audio) = audio_buffer_clone.front() {
+                debug!(
+                    "Newest Vid TS: {}, Audio TS: {}",
+                    newest_video.time, newest_audio.capture_time
+                );
+            }
+        }
+
+        // Write video
         let first_frame_offset = video_buffer_clone.front().unwrap().time;
         for frame in video_buffer_clone {
             let offset = frame.time - first_frame_offset;
@@ -252,13 +269,27 @@ impl FfmpegEncoder {
             packet.set_pts(Some(offset));
             packet.set_dts(Some(offset));
 
-            debug!("Offset PTS: {}, Frame actual PTS: {}", offset, frame.time,);
-
-            packet.set_stream(0);
+            packet.set_stream(VIDEO_STREAM);
 
             packet
                 .write_interleaved(&mut output)
-                .expect("Could not write interleaved");
+                .expect("Could not write video interleaved");
+        }
+
+        // Write audio
+        let first_frame_offset = audio_buffer_clone.front().unwrap().chunk_time;
+        for frame in audio_buffer_clone {
+            let offset = frame.chunk_time - first_frame_offset;
+
+            let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.frame_bytes);
+            packet.set_pts(Some(offset));
+            packet.set_dts(Some(offset));
+
+            packet.set_stream(AUDIO_STREAM);
+
+            packet
+                .write_interleaved(&mut output)
+                .expect("Could not write audio interleaved");
         }
 
         output.write_trailer()?;
@@ -266,6 +297,9 @@ impl FfmpegEncoder {
         Ok(())
     }
 
+    // Use this one to test output of audio pipewire stream seems to have
+    // weird static so will need to test more
+    #[allow(dead_code)]
     pub fn save_audio(&mut self, filename: &str) -> Result<(), ffmpeg::Error> {
         let audio_buffer_clone = &self.audio_buffer.clone();
         let codec = self.audio_encoder.codec().unwrap();
@@ -276,12 +310,6 @@ impl FfmpegEncoder {
         stream.set_parameters(&self.audio_encoder);
 
         output.write_header()?;
-
-        debug!(
-            "TOTAL ACTUAL ELAPSED TIME: {}",
-            audio_buffer_clone.back().unwrap().capture_time
-                - audio_buffer_clone.front().unwrap().capture_time
-        );
 
         for data in audio_buffer_clone {
             let mut packet = ffmpeg::codec::packet::Packet::copy(&data.frame_bytes);
