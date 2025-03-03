@@ -7,7 +7,7 @@ runs in the background while you play and you can use a keybind to clip the last
 
 Currently it offers video and audio capture when ran and exports the capture into an mp4 file all using ffmpeg.
 
-Use `busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveClip` to invoke the same command.
+Use `busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveClip` to invoke the save command.
 
 # Core features
 - [x] Asks permission from user to record their screen (Wayland limitation).
