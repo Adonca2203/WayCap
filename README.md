@@ -3,7 +3,7 @@ This is a simple screen recorder written in Rust for Wayland Linux Desktop Envir
 
 It uses Nvidia's NVENC to encode the frames using the GPU, Opus as the audio encoder and the end goal
 is to have this behave similar to applications like Medal.tv or Nvidia's Shadowplay feature where this
-runs in the background while you play and you can use a keybind to clip the last [X] seconds of gameple.
+runs in the background while you play and you can use a keybind to clip the last [X] seconds of gameplay.
 
 Currently it offers video and audio capture when ran and exports the capture into an mp4 file all using ffmpeg.
 
