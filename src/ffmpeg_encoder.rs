@@ -171,7 +171,7 @@ impl FfmpegEncoder {
         Ok(())
     }
 
-    pub fn process_audio(&mut self, audio: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
+    pub fn process_audio(&mut self, audio: &[u8], time_micro: i64, samples: usize) -> Result<(), ffmpeg::Error> {
         let audio_i16: &[i16] = bytemuck::cast_slice(audio);
         let n_channels = self.audio_encoder.channels() as usize;
         let total_samples = audio_i16.len();
@@ -185,7 +185,7 @@ impl FfmpegEncoder {
 
         let frame_size = self.audio_encoder.frame_size() as usize;
 
-        self.leftover_audio_data.extend(audio_i16);
+        self.leftover_audio_data.extend(audio_i16[..samples].iter().copied());
 
         while self.leftover_audio_data.len() >= frame_size {
             let frame_samples: Vec<i16> = self.leftover_audio_data.drain(..frame_size).collect();
