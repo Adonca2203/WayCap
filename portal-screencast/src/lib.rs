@@ -93,6 +93,7 @@ pub struct ScreenCast {
     session: String,
     multiple: bool,
     source_types: Option<SourceType>,
+    cursor_mode: Option<CursorMode>,
 }
 
 impl ScreenCast {
@@ -130,6 +131,7 @@ impl ScreenCast {
             session,
             multiple: false,
             source_types: None,
+            cursor_mode: None,
         })
     }
 
@@ -145,12 +147,19 @@ impl ScreenCast {
         self.source_types = Some(types);
     }
 
+    // Set cursor mode
+    pub fn set_cursor_mode(&mut self, mode: CursorMode) {
+        self.cursor_mode = Some(mode);
+    }
+
     /// Enable multi-stream selection. This allows the user to choose more than
     /// one thing to share. Each will be a separate item in the
     /// `ActiveScreenCast::streams()` iterator.
     pub fn enable_multiple(&mut self) {
         self.multiple = true;
     }
+
+    /// Set the cursor visbility mode
 
     /// Try to start the screen cast. This will prompt the user to select a
     /// source to share.
@@ -173,6 +182,14 @@ impl ScreenCast {
                 })),
             );
             select_args.insert("multiple".into(), Variant(Box::new(self.multiple)));
+            select_args.insert(
+                "cursor_mode".into(),
+                Variant(Box::new(match self.cursor_mode {
+                    Some(mode) => mode.bits(),
+                    None => CursorMode::HIDDEN.bits(),
+                })),
+            );
+
             desktop_proxy.select_sources(session, select_args)?;
             request.wait_response()?;
         }
@@ -296,7 +313,13 @@ bitflags! {
     pub struct SourceType : u32  {
         const MONITOR = 0b00001;
         const WINDOW = 0b00010;
-        const AUDIO = 0b0010;
+    }
+
+    /// Cursor Mode Bitflags
+    pub struct CursorMode : u32 {
+        const HIDDEN = 0b00001;
+        const EMBEDDED = 0b00010;
+        const METADATA = 0b00011;
     }
 }
 

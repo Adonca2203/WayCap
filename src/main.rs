@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Error, Result};
 use pipewire_capture::PipewireCapture;
 use log::{debug, LevelFilter};
-use portal_screencast::{ScreenCast, SourceType};
+use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
 
@@ -43,6 +43,7 @@ async fn main() -> Result<(), Error> {
     debug!("Selecting screen to record");
     let mut screen_cast = ScreenCast::new()?;
     screen_cast.set_source_types(SourceType::MONITOR);
+    screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
 
     let screen_cast = screen_cast.start(None)?;
 
