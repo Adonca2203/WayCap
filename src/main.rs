@@ -64,10 +64,10 @@ async fn main() -> Result<(), Error> {
                     .process_frame(&frame, time)
                     .unwrap();
             },
-            move |audio, timestamp, samples| {
+            move |audio, timestamp| {
                 audio_encoder_clone
                     .blocking_lock()
-                    .process_audio(&audio, timestamp, samples)
+                    .process_audio(&audio, timestamp)
                     .unwrap();
             },
         )

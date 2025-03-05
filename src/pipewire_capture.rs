@@ -42,7 +42,7 @@ impl PipewireCapture {
     ) -> Result<Self, pipewire::Error>
     where
         F1: Fn(Vec<u8>, i64) + Send + 'static,
-        F2: Fn(Vec<u8>, i64, usize) + Send + 'static,
+        F2: Fn(Vec<f32>, i64) + Send + 'static,
     {
         pw::init();
         let pw_loop = MainLoop::new(None)?;
@@ -287,10 +287,11 @@ impl PipewireCapture {
                     };
 
                     let data = &mut datas[0];
-                    let n_samples = data.chunk().size() / (std::mem::size_of::<i16>()) as u32;
+                    let n_samples = data.chunk().size() / (std::mem::size_of::<f32>()) as u32;
 
                     if let Some(samples) = data.data() {
-                        process_audio_callback(samples.to_vec(), time_ms, n_samples as usize);
+                        let samples_f32: &[f32] = bytemuck::cast_slice(samples);
+                        process_audio_callback(samples_f32[..n_samples as usize].to_vec(), time_ms);
                     }
                 }
             })
@@ -312,7 +313,7 @@ impl PipewireCapture {
             pw::spa::pod::property!(
                 pw::spa::param::format::FormatProperties::AudioFormat,
                 Id,
-                pw::spa::param::audio::AudioFormat::S16LE
+                pw::spa::param::audio::AudioFormat::F32LE
             )
         };
 
