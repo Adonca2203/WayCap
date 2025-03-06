@@ -3,10 +3,11 @@ use std::{collections::VecDeque, usize};
 use anyhow::Result;
 use ffmpeg_next::{
     self as ffmpeg,
+    codec::traits::Encoder,
     software::scaling::{Context as Scaler, Flags},
     Rational,
 };
-use log::debug;
+use log::{debug, warn};
 
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
@@ -83,9 +84,28 @@ impl FfmpegEncoder {
     ) -> Result<Self, ffmpeg::Error> {
         let _ = ffmpeg::init();
 
-        let video_encoder = create_nvenc_encoder(width, height, fps)?;
+        let video_encoder = match create_video_encoder(width, height, fps, "h264_nvenc") {
+            Ok(video_encoder) => video_encoder,
+            Err(_) => {
+                debug!("Could not find h264_nvenc encoder. Trying AMD");
+                match create_video_encoder(width, height, fps, "h264_amf") {
+                    Ok(video_encoder) => video_encoder,
+                    Err(_) => {
+                        warn!("Could not find h264_amf encoder. Falling back to CPU based encoder");
+                        match create_video_encoder(width, height, fps, "h264_amf") {
+                            Ok(video_encoder) => {
+                                warn!("It's not recommended to use a CPU based encoder for this application but no GPU based one could be found.");
+                                video_encoder
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+            }
+        };
 
         let audio_encoder = create_opus_encoder()?;
+
         Ok(Self {
             video_encoder,
             video_buffer: VecDeque::new(),
@@ -326,13 +346,14 @@ impl FfmpegEncoder {
     }
 }
 
-fn create_nvenc_encoder(
+fn create_video_encoder(
     width: u32,
     height: u32,
     target_fps: u32,
+    encoder_name: &str,
 ) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
     let encoder_codec =
-        ffmpeg::codec::encoder::find_by_name("h264_nvenc").ok_or(ffmpeg::Error::EncoderNotFound)?;
+        ffmpeg::codec::encoder::find_by_name(encoder_name).ok_or(ffmpeg::Error::EncoderNotFound)?;
 
     let mut encoder_ctx = ffmpeg::codec::context::Context::new_with_codec(encoder_codec)
         .encoder()
