@@ -207,6 +207,14 @@ impl FfmpegEncoder {
         self.leftover_audio_data.extend(audio);
 
         while self.leftover_audio_data.len() >= frame_size {
+            while let Some(oldest_video) = self.video_buffer.front() {
+                if let Some(newest_audio) = self.audio_buffer.back() {
+                    if newest_audio.capture_time - oldest_video.time > self.max_time as i64 {
+                        self.audio_buffer.pop_front();
+                    }
+                    break;
+                }
+            }
             let frame_samples: Vec<f32> = self.leftover_audio_data.drain(..frame_size).collect();
             let mut frame = ffmpeg::frame::Audio::new(
                 self.audio_encoder.format(),
