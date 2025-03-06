@@ -277,6 +277,8 @@ impl std::ops::Drop for ActiveScreenCast {
 #[derive(Debug)]
 pub struct ScreenCastStream {
     pipewire_node: u32,
+    width: u32,
+    height: u32,
     // Add width and height for the stream to grab dynamically later
     // TODO: other stream metadata.
 }
@@ -286,6 +288,14 @@ impl ScreenCastStream {
     pub fn pipewire_node(&self) -> u32 {
         self.pipewire_node
     }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
 }
 
 impl std::convert::TryFrom<&dyn RefArg> for ScreenCastStream {
@@ -293,14 +303,49 @@ impl std::convert::TryFrom<&dyn RefArg> for ScreenCastStream {
 
     fn try_from(value: &dyn RefArg) -> Result<Self, Self::Error> {
         let mut parts_iter = value.as_iter().ok_or(PortalError::Parse)?;
+
+        // Get node id
         let node_id = parts_iter
             .next()
             .and_then(|r| r.as_u64())
             .map(|r| r as u32)
             .ok_or(PortalError::Parse)?;
-        // TODO: parse other metdata here.
+
+        let metadata = parts_iter.next().ok_or(PortalError::Parse)?;
+
+        let mut width = 0;
+        let mut height = 0;
+
+        if let Some(mut dict_iter) = metadata.as_iter() {
+            while let Some(key) = dict_iter.next() {
+                if key.as_str() == Some("size") {
+                    if let Some(values) = dict_iter.next().ok_or(PortalError::Parse)?.as_iter()
+                    {
+                        for v in values {
+                            let mut v_iter = v.as_iter().ok_or(PortalError::Parse)?;
+                            width = v_iter
+                                .next()
+                                .and_then(|w| w.as_i64())
+                                .map(|w| w as u32)
+                                .ok_or(PortalError::Parse)?;
+
+                            height = v_iter
+                                .next()
+                                .and_then(|h| h.as_i64())
+                                .map(|h| h as u32)
+                                .ok_or(PortalError::Parse)?;
+                        }
+                    } else {
+                        return Err(PortalError::Parse);
+                    }
+                }
+            }
+        }
+
         Ok(ScreenCastStream {
             pipewire_node: node_id,
+            width,
+            height,
         })
     }
 }

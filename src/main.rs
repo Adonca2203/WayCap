@@ -15,10 +15,16 @@ use zbus::connection;
 async fn main() -> Result<(), Error> {
     let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
 
-    // TODO: Grab these dynamically based on screen picked
-    // with screencast portal?
-    let width = 2560;
-    let height = 1440;
+    let mut screen_cast = ScreenCast::new()?;
+    screen_cast.set_source_types(SourceType::MONITOR);
+    screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
+    let screen_cast = screen_cast.start(None)?;
+
+    let fd = screen_cast.pipewire_fd();
+    let stream = screen_cast.streams().next().unwrap();
+    let stream_node = stream.pipewire_node();
+    let (width, height) = (stream.width(), stream.height());
+
     let fps = 240;
     let max_seconds = 300;
 
@@ -40,17 +46,6 @@ async fn main() -> Result<(), Error> {
         .build()
         .await?;
 
-    debug!("Selecting screen to record");
-    let mut screen_cast = ScreenCast::new()?;
-    screen_cast.set_source_types(SourceType::MONITOR);
-    screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
-
-    let screen_cast = screen_cast.start(None)?;
-
-    let fd = screen_cast.pipewire_fd();
-    debug!("Stream nodes: {}", screen_cast.streams().count());
-    let stream_node = screen_cast.streams().next().unwrap().pipewire_node();
-    debug!("Pipewire fd: {}", fd);
 
     std::thread::spawn(move || {
         let video_encoder_clone = Arc::clone(&encoder_thread);
