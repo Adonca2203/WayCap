@@ -23,7 +23,7 @@ async fn main() -> Result<(), Error> {
     let fd = screen_cast.pipewire_fd();
     let stream = screen_cast.streams().next().unwrap();
     let stream_node = stream.pipewire_node();
-    let (width, height) = (stream.width(), stream.height());
+    let (width, height) = stream.size();
 
     let fps = 240;
     let max_seconds = 300;

@@ -22,6 +22,7 @@
 //! // Set which source types to allow, and enable multiple items to be shared.
 //! screen_cast.set_source_types(SourceType::MONITOR);
 //! screen_cast.enable_multiple();
+//! screen_cast.set_cursor_mode(CursorMode::HIDDEN);
 //! // If you have a window handle you can tie the dialog to it
 //! let screen_cast = screen_cast.start(Some("wayland:<window_id>"))?;
 //! # Ok(())
@@ -147,7 +148,7 @@ impl ScreenCast {
         self.source_types = Some(types);
     }
 
-    // Set cursor mode
+    // Set cursor visibilty/mode (HIDDEN by default)
     pub fn set_cursor_mode(&mut self, mode: CursorMode) {
         self.cursor_mode = Some(mode);
     }
@@ -158,8 +159,6 @@ impl ScreenCast {
     pub fn enable_multiple(&mut self) {
         self.multiple = true;
     }
-
-    /// Set the cursor visbility mode
 
     /// Try to start the screen cast. This will prompt the user to select a
     /// source to share.
@@ -279,8 +278,6 @@ pub struct ScreenCastStream {
     pipewire_node: u32,
     width: u32,
     height: u32,
-    // Add width and height for the stream to grab dynamically later
-    // TODO: other stream metadata.
 }
 
 impl ScreenCastStream {
@@ -295,6 +292,10 @@ impl ScreenCastStream {
 
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.width(), self.height())
     }
 }
 
@@ -319,8 +320,7 @@ impl std::convert::TryFrom<&dyn RefArg> for ScreenCastStream {
         if let Some(mut dict_iter) = metadata.as_iter() {
             while let Some(key) = dict_iter.next() {
                 if key.as_str() == Some("size") {
-                    if let Some(values) = dict_iter.next().ok_or(PortalError::Parse)?.as_iter()
-                    {
+                    if let Some(values) = dict_iter.next().ok_or(PortalError::Parse)?.as_iter() {
                         for v in values {
                             let mut v_iter = v.as_iter().ok_or(PortalError::Parse)?;
                             width = v_iter
@@ -361,10 +361,15 @@ bitflags! {
     }
 
     /// Cursor Mode Bitflags
+    ///
+    /// Refer to the freedesktop [docs](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.impl.portal.ScreenCast.html#org-freedesktop-impl-portal-screencast-availablecursormodes)
+    /// to see more details about what these each mean
+    /// 
+    /// Default: HIDDEN
     pub struct CursorMode : u32 {
         const HIDDEN = 0b00001;
         const EMBEDDED = 0b00010;
-        const METADATA = 0b00011;
+        const METADATA = 0b00100;
     }
 }
 
