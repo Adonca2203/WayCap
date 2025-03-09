@@ -3,7 +3,6 @@ use std::{collections::VecDeque, usize};
 use anyhow::Result;
 use ffmpeg_next::{
     self as ffmpeg,
-    codec::traits::Encoder,
     software::scaling::{Context as Scaler, Flags},
     Rational,
 };
@@ -11,6 +10,8 @@ use log::{debug, warn};
 
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
+const MIN_AUDIO_VOLUME: f32 = 0.2;
+const MAX_AUDIO_VOLUME: f32 = 0.8;
 
 pub struct FfmpegEncoder {
     video_encoder: ffmpeg::codec::encoder::Video,
@@ -21,6 +22,7 @@ pub struct FfmpegEncoder {
     keyframe_indexes: Vec<usize>,
     next_pts: i64,
     leftover_audio_data: VecDeque<f32>,
+    prev_gain: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +94,7 @@ impl FfmpegEncoder {
                     Ok(video_encoder) => video_encoder,
                     Err(_) => {
                         warn!("Could not find h264_amf encoder. Falling back to CPU based encoder");
-                        match create_video_encoder(width, height, fps, "h264_amf") {
+                        match create_video_encoder(width, height, fps, "h264") {
                             Ok(video_encoder) => {
                                 warn!("It's not recommended to use a CPU based encoder for this application but no GPU based one could be found.");
                                 video_encoder
@@ -116,6 +118,7 @@ impl FfmpegEncoder {
             audio_encoder,
             next_pts: 0,
             leftover_audio_data: VecDeque::new(),
+            prev_gain: 1.0,
         })
     }
 
@@ -204,7 +207,12 @@ impl FfmpegEncoder {
 
         let frame_size = self.audio_encoder.frame_size() as usize;
 
-        self.leftover_audio_data.extend(audio);
+        // Normalize the audio so that even if system audio level is low
+        // it's still audible in playback
+        let mut normalized_audio = audio.to_vec();
+        self.normalize_audio_volume(&mut normalized_audio, MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME);
+
+        self.leftover_audio_data.extend(normalized_audio);
 
         while self.leftover_audio_data.len() >= frame_size {
             while let Some(oldest_video) = self.video_buffer.front() {
@@ -215,6 +223,7 @@ impl FfmpegEncoder {
                     break;
                 }
             }
+
             let frame_samples: Vec<f32> = self.leftover_audio_data.drain(..frame_size).collect();
             let mut frame = ffmpeg::frame::Audio::new(
                 self.audio_encoder.format(),
@@ -239,6 +248,34 @@ impl FfmpegEncoder {
         }
 
         Ok(())
+    }
+
+    fn normalize_audio_volume(&mut self, samples: &mut [f32], min_volume: f32, max_volume: f32) {
+        let peak = samples
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .reduce(f32::max)
+            .unwrap_or(0.0);
+
+        if peak > 0.0 {
+            let target_gain = if peak < min_volume {
+                min_volume / peak // Boost if too quiet
+            } else if peak > max_volume {
+                max_volume / peak // Reduce if too loud
+            } else {
+                1.0 // Keep unchanged
+            };
+
+            // Smooth the gain to avoid sudden jumps
+            let smoothing_factor = 0.1;
+            self.prev_gain =
+                self.prev_gain * (1.0 - smoothing_factor) + target_gain * smoothing_factor;
+
+            for sample in samples.iter_mut() {
+                *sample *= self.prev_gain;
+            }
+        }
     }
 
     pub fn save_buffer(&mut self, filename: &str) -> Result<(), ffmpeg::Error> {
@@ -371,7 +408,10 @@ fn create_video_encoder(
     encoder_ctx.set_height(height);
     encoder_ctx.set_format(ffmpeg::format::Pixel::NV12);
     encoder_ctx.set_frame_rate(Some(Rational::new(target_fps as i32, 1)));
-    encoder_ctx.set_bit_rate(5_000_000);
+
+    // High Quality at 244hz @1440p may need to be tweaked -- This should be a dynamic setting
+    // whenever I start working on a config file
+    encoder_ctx.set_bit_rate(120_000_000);
     encoder_ctx.set_time_base(Rational::new(1, 1_000_000));
 
     // Needed to insert I-Frames more frequently so we don't lose full seconds
