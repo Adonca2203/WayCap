@@ -1,10 +1,10 @@
-use std::{collections::VecDeque, usize};
+use crate::encoders::{audio_encoder::create_opus_encoder, video_encoder::create_video_encoder};
+use std::{cell::RefCell, collections::VecDeque, usize};
 
 use anyhow::Result;
 use ffmpeg_next::{
     self as ffmpeg,
     software::scaling::{Context as Scaler, Flags},
-    Rational,
 };
 use log::{debug, warn};
 
@@ -12,6 +12,10 @@ const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
 const MIN_AUDIO_VOLUME: f32 = 0.2;
 const MAX_AUDIO_VOLUME: f32 = 0.8;
+
+thread_local! {
+    static SCALER: RefCell<Option<Scaler>> = RefCell::new(None);
+}
 
 pub struct FfmpegEncoder {
     video_encoder: ffmpeg::codec::encoder::Video,
@@ -22,7 +26,6 @@ pub struct FfmpegEncoder {
     keyframe_indexes: Vec<usize>,
     next_pts: i64,
     leftover_audio_data: VecDeque<f32>,
-    prev_gain: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -118,83 +121,98 @@ impl FfmpegEncoder {
             audio_encoder,
             next_pts: 0,
             leftover_audio_data: VecDeque::new(),
-            prev_gain: 1.0,
         })
     }
 
-    pub fn process_frame(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
-        let mut scaler = Scaler::get(
-            ffmpeg_next::format::Pixel::BGRA,
-            self.video_encoder.width(),
-            self.video_encoder.height(),
-            ffmpeg_next::format::Pixel::NV12,
-            self.video_encoder.width(),
-            self.video_encoder.height(),
-            Flags::BILINEAR,
-        )?;
+    pub fn process_video(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
+        SCALER.with(|scaler_cell| {
+            let mut scaler = scaler_cell.borrow_mut();
+            if scaler.is_none() {
+                *scaler = Some(
+                    Scaler::get(
+                        ffmpeg_next::format::Pixel::BGRA,
+                        self.video_encoder.width(),
+                        self.video_encoder.height(),
+                        ffmpeg_next::format::Pixel::NV12,
+                        self.video_encoder.width(),
+                        self.video_encoder.height(),
+                        Flags::BILINEAR,
+                    )
+                    .unwrap(),
+                );
+            }
 
-        let mut frame_data = VideoFrameData::new();
-        frame_data.set_time(time_micro);
+            let mut frame_data = VideoFrameData::new();
+            frame_data.set_time(time_micro);
 
-        let mut src_frame = ffmpeg::util::frame::video::Video::new(
-            ffmpeg_next::format::Pixel::BGRA,
-            self.video_encoder.width(),
-            self.video_encoder.height(),
-        );
+            let mut src_frame = ffmpeg::util::frame::video::Video::new(
+                ffmpeg_next::format::Pixel::BGRA,
+                self.video_encoder.width(),
+                self.video_encoder.height(),
+            );
 
-        src_frame.set_pts(Some(time_micro));
-        src_frame.data_mut(0).copy_from_slice(frame);
+            src_frame.set_pts(Some(time_micro));
+            src_frame.data_mut(0).copy_from_slice(frame);
 
-        // Create destination frame in NV12 format
-        let mut dst_frame = ffmpeg::util::frame::video::Video::new(
-            ffmpeg_next::format::Pixel::NV12,
-            self.video_encoder.width(),
-            self.video_encoder.height(),
-        );
-        dst_frame.set_pts(Some(time_micro));
-        scaler.run(&src_frame, &mut dst_frame)?;
+            // Create destination frame in NV12 format
+            let mut dst_frame = ffmpeg::util::frame::video::Video::new(
+                ffmpeg_next::format::Pixel::NV12,
+                self.video_encoder.width(),
+                self.video_encoder.height(),
+            );
+            dst_frame.set_pts(Some(time_micro));
+            scaler
+                .as_mut()
+                .unwrap()
+                .run(&src_frame, &mut dst_frame)
+                .unwrap();
 
-        self.video_encoder.send_frame(&dst_frame)?;
+            self.video_encoder.send_frame(&dst_frame).unwrap();
 
-        let mut packet = ffmpeg::codec::packet::Packet::empty();
-        if self.video_encoder.receive_packet(&mut packet).is_ok() {
-            if let Some(data) = packet.data() {
-                frame_data.set_frame_bytes(data.to_vec());
+            let mut packet = ffmpeg::codec::packet::Packet::empty();
+            if self.video_encoder.receive_packet(&mut packet).is_ok() {
+                if let Some(data) = packet.data() {
+                    frame_data.set_frame_bytes(data.to_vec());
 
-                // Keep the buffer to max
-                while let Some(oldest) = self.video_buffer.front() {
-                    if let Some(newest) = self.video_buffer.back() {
-                        if newest.time - oldest.time >= self.max_time as i64
-                            && self.keyframe_indexes.len() > 0
-                        {
-                            debug!("{:?}", self.keyframe_indexes);
-                            let drained = self
-                                .video_buffer
-                                .drain(0..self.keyframe_indexes[0] as usize);
+                    // Keep the buffer to max
+                    while let Some(oldest) = self.video_buffer.front() {
+                        if let Some(newest) = self.video_buffer.back() {
+                            if newest.time - oldest.time >= self.max_time as i64
+                                && self.keyframe_indexes.len() > 0
+                            {
+                                debug!("{:?}", self.keyframe_indexes);
+                                let drained = self
+                                    .video_buffer
+                                    .drain(0..self.keyframe_indexes[0] as usize);
 
-                            self.keyframe_indexes
-                                .iter_mut()
-                                .for_each(|index| *index -= drained.len());
-                            self.keyframe_indexes.retain(|&index| index != 0);
+                                self.keyframe_indexes
+                                    .iter_mut()
+                                    .for_each(|index| *index -= drained.len());
+                                self.keyframe_indexes.retain(|&index| index != 0);
 
-                            debug!("Drained {} frames.", drained.len());
-                        } else {
-                            break;
+                                debug!("Drained {} frames.", drained.len());
+                            } else {
+                                break;
+                            }
                         }
                     }
-                }
 
-                self.video_buffer.push_back(frame_data);
-                if packet.is_key() && self.video_buffer.len() > 1 {
-                    self.keyframe_indexes.push(self.video_buffer.len() - 1);
-                }
-            };
-        }
+                    self.video_buffer.push_back(frame_data);
+                    if packet.is_key() && self.video_buffer.len() > 1 {
+                        self.keyframe_indexes.push(self.video_buffer.len() - 1);
+                    }
+                };
+            }
+        });
 
         Ok(())
     }
 
-    pub fn process_audio(&mut self, audio: &[f32], time_micro: i64) -> Result<(), ffmpeg::Error> {
+    pub fn process_audio(
+        &mut self,
+        audio: &mut [f32],
+        time_micro: i64,
+    ) -> Result<(), ffmpeg::Error> {
         let n_channels = self.audio_encoder.channels() as usize;
         let total_samples = audio.len();
 
@@ -209,10 +227,9 @@ impl FfmpegEncoder {
 
         // Normalize the audio so that even if system audio level is low
         // it's still audible in playback
-        let mut normalized_audio = audio.to_vec();
-        self.normalize_audio_volume(&mut normalized_audio, MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME);
+        self.normalize_audio_volume(audio, MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME);
 
-        self.leftover_audio_data.extend(normalized_audio);
+        self.leftover_audio_data.extend(audio.iter().copied());
 
         while self.leftover_audio_data.len() >= frame_size {
             while let Some(oldest_video) = self.video_buffer.front() {
@@ -259,21 +276,11 @@ impl FfmpegEncoder {
             .unwrap_or(0.0);
 
         if peak > 0.0 {
-            let target_gain = if peak < min_volume {
-                min_volume / peak // Boost if too quiet
-            } else if peak > max_volume {
-                max_volume / peak // Reduce if too loud
-            } else {
-                1.0 // Keep unchanged
-            };
-
-            // Smooth the gain to avoid sudden jumps
-            let smoothing_factor = 0.1;
-            self.prev_gain =
-                self.prev_gain * (1.0 - smoothing_factor) + target_gain * smoothing_factor;
+            let target_peak = peak.clamp(min_volume, max_volume);
+            let scaling_factor = target_peak / peak;
 
             for sample in samples.iter_mut() {
-                *sample *= self.prev_gain;
+                *sample *= scaling_factor;
             }
         }
     }
@@ -389,67 +396,4 @@ impl FfmpegEncoder {
 
         Ok(())
     }
-}
-
-fn create_video_encoder(
-    width: u32,
-    height: u32,
-    target_fps: u32,
-    encoder_name: &str,
-) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
-    let encoder_codec =
-        ffmpeg::codec::encoder::find_by_name(encoder_name).ok_or(ffmpeg::Error::EncoderNotFound)?;
-
-    let mut encoder_ctx = ffmpeg::codec::context::Context::new_with_codec(encoder_codec)
-        .encoder()
-        .video()?;
-
-    encoder_ctx.set_width(width);
-    encoder_ctx.set_height(height);
-    encoder_ctx.set_format(ffmpeg::format::Pixel::NV12);
-    encoder_ctx.set_frame_rate(Some(Rational::new(target_fps as i32, 1)));
-
-    // High Quality at 244hz @1440p may need to be tweaked -- This should be a dynamic setting
-    // whenever I start working on a config file
-    encoder_ctx.set_bit_rate(120_000_000);
-    encoder_ctx.set_time_base(Rational::new(1, 1_000_000));
-
-    // Needed to insert I-Frames more frequently so we don't lose full seconds
-    // when popping frames from the front
-    encoder_ctx.set_gop(30);
-
-    let encoder_params = ffmpeg::codec::Parameters::new();
-
-    encoder_ctx.set_parameters(encoder_params)?;
-    let encoder = encoder_ctx.open()?;
-
-    Ok(encoder)
-}
-
-fn create_opus_encoder() -> Result<ffmpeg::codec::encoder::Audio, ffmpeg::Error> {
-    let encoder_codec = ffmpeg::codec::encoder::find(ffmpeg_next::codec::Id::OPUS)
-        .ok_or(ffmpeg::Error::EncoderNotFound)?;
-
-    let mut encoder_ctx = ffmpeg::codec::context::Context::new_with_codec(encoder_codec)
-        .encoder()
-        .audio()?;
-
-    encoder_ctx.set_rate(48000);
-    encoder_ctx.set_bit_rate(128_000);
-    encoder_ctx.set_format(ffmpeg::format::Sample::F32(
-        ffmpeg_next::format::sample::Type::Packed,
-    ));
-    encoder_ctx.set_time_base(Rational::new(1, 48000));
-    encoder_ctx.set_frame_rate(Some(Rational::new(1, 48000)));
-    encoder_ctx.set_channel_layout(ffmpeg::channel_layout::ChannelLayout::STEREO);
-
-    let mut encoder = encoder_ctx.open()?;
-
-    // Opus frame size is based on n channels so need to update it
-    unsafe {
-        (*encoder.as_mut_ptr()).frame_size =
-            (encoder.frame_size() as i32 * encoder.channels() as i32) as i32;
-    }
-
-    Ok(encoder)
 }

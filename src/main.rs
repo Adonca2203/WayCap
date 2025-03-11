@@ -1,6 +1,7 @@
 mod dbus;
 mod ffmpeg_encoder;
 mod pipewire_capture;
+mod encoders;
 
 use std::sync::Arc;
 
@@ -57,13 +58,13 @@ async fn main() -> Result<(), Error> {
             move |frame, time| {
                 video_encoder_clone
                     .blocking_lock()
-                    .process_frame(&frame, time)
+                    .process_video(&frame, time)
                     .unwrap();
             },
-            move |audio, timestamp| {
+            move |mut audio, timestamp| {
                 audio_encoder_clone
                     .blocking_lock()
-                    .process_audio(&audio, timestamp)
+                    .process_audio(&mut audio, timestamp)
                     .unwrap();
             },
         )
