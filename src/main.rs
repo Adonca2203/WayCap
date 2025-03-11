@@ -26,7 +26,7 @@ async fn main() -> Result<(), Error> {
     let stream_node = stream.pipewire_node();
     let (width, height) = stream.size();
 
-    let fps = 240;
+    let target_fps = 60;
     let max_seconds = 300;
 
     let (save_tx, mut save_rx) = mpsc::channel(1);
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Error> {
     let encoder = Arc::new(Mutex::new(ffmpeg_encoder::FfmpegEncoder::new(
         width,
         height,
-        fps,
+        target_fps,
         max_seconds,
     )?));
 

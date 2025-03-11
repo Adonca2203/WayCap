@@ -26,6 +26,8 @@ pub struct FfmpegEncoder {
     keyframe_indexes: Vec<usize>,
     next_pts: i64,
     leftover_audio_data: VecDeque<f32>,
+    last_frame_time: Option<i64>,
+    frame_interval: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -121,10 +123,26 @@ impl FfmpegEncoder {
             audio_encoder,
             next_pts: 0,
             leftover_audio_data: VecDeque::new(),
+            last_frame_time: None,
+            frame_interval: 1_000_000 / fps as i64,
         })
     }
 
     pub fn process_video(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
+        // Throttle to target input framerate
+        if let Some(last_time) = self.last_frame_time {
+            let elapsed = time_micro - last_time;
+            if elapsed < self.frame_interval {
+                debug!(
+                    "Discarding this frame. \nElapsed: {}\nFrame Interval: {}",
+                    elapsed, self.frame_interval
+                );
+                return Ok(());
+            }
+        }
+
+        self.last_frame_time = Some(time_micro);
+
         SCALER.with(|scaler_cell| {
             let mut scaler = scaler_cell.borrow_mut();
             if scaler.is_none() {
