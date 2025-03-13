@@ -1,5 +1,4 @@
 use std::{
-    fmt::Debug,
     os::fd::{FromRawFd, OwnedFd, RawFd},
     time::SystemTime,
 };
@@ -18,9 +17,7 @@ use pipewire::{
 use pw::{properties::properties, spa};
 
 use spa::pod::Pod;
-
-#[derive(Default, Debug)]
-pub struct Frame {}
+use tokio::sync::mpsc;
 
 pub struct PipewireCapture {
     main_loop: MainLoop,
@@ -34,16 +31,12 @@ struct UserData {
 }
 
 impl PipewireCapture {
-    pub fn new<F1, F2>(
+    pub fn new(
         pipewire_fd: RawFd,
         stream_node: u32,
-        process_video_callback: F1,
-        process_audio_callback: F2,
-    ) -> Result<Self, pipewire::Error>
-    where
-        F1: Fn(Vec<u8>, i64) + Send + 'static,
-        F2: Fn(&mut Vec<f32>, i64) + Send + 'static,
-    {
+        process_video_callback: mpsc::Sender<(Vec<u8>, i64)>,
+        process_audio_callback: mpsc::Sender<(Vec<f32>, i64)>,
+    ) -> Result<Self, pipewire::Error> {
         pw::init();
         let pw_loop = MainLoop::new(None)?;
         let pw_context = Context::new(&pw_loop)?;
@@ -145,7 +138,9 @@ impl PipewireCapture {
 
                         // send frame data to encoder
                         let data = &mut datas[0];
-                        process_video_callback(data.data().unwrap().to_vec(), time_ms);
+                        if let Some(frame) = data.data() {
+                            process_video_callback.blocking_send((frame.to_vec(), time_ms)).unwrap();
+                        }
                     }
                 }
             })
@@ -291,7 +286,8 @@ impl PipewireCapture {
 
                     if let Some(samples) = data.data() {
                         let samples_f32: &[f32] = bytemuck::cast_slice(samples);
-                        process_audio_callback(&mut samples_f32[..n_samples as usize].to_vec(), time_ms);
+                        let audio_samples = &samples_f32[..n_samples as usize];
+                        process_audio_callback.blocking_send((audio_samples.to_vec(), time_ms)).unwrap();
                     }
                 }
             })
