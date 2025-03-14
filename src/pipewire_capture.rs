@@ -1,5 +1,6 @@
 use std::{
     os::fd::{FromRawFd, OwnedFd, RawFd},
+    sync::{atomic::AtomicBool, Arc},
     time::SystemTime,
 };
 
@@ -12,7 +13,7 @@ use pipewire::{
         param::format::{MediaSubtype, MediaType},
         utils::Direction,
     },
-    stream::{Stream, StreamFlags},
+    stream::{Stream, StreamFlags, StreamState},
 };
 use pw::{properties::properties, spa};
 
@@ -23,11 +24,35 @@ pub struct PipewireCapture {
     main_loop: MainLoop,
 }
 
+struct SharedState {
+    video_ready: AtomicBool,
+    audio_ready: AtomicBool,
+    start_time: SystemTime,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            video_ready: false.into(),
+            audio_ready: false.into(),
+            start_time: SystemTime::now(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct UserData {
     video_format: spa::param::video::VideoInfoRaw,
     audio_format: spa::param::audio::AudioInfoRaw,
-    start_time: SystemTime,
+}
+
+impl Default for UserData {
+    fn default() -> Self {
+        Self {
+            video_format: Default::default(),
+            audio_format: Default::default(),
+        }
+    }
 }
 
 impl PipewireCapture {
@@ -44,11 +69,8 @@ impl PipewireCapture {
 
         let audio_core = pw_context.connect(None)?;
 
-        let data = UserData {
-            video_format: Default::default(),
-            audio_format: Default::default(),
-            start_time: SystemTime::now(),
-        };
+        let data = UserData::default();
+        let shared_state = Arc::new(SharedState::default());
 
         let _listener = core
             .add_listener_local()
@@ -75,11 +97,49 @@ impl PipewireCapture {
             },
         )?;
 
+        let _video_stream_shared_data_listener = video_stream
+            .add_local_listener_with_user_data(shared_state.clone())
+            .state_changed(|_, udata, old, new| {
+                debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
+                udata.video_ready.store(
+                    new == StreamState::Streaming,
+                    std::sync::atomic::Ordering::Release,
+                );
+            })
+            .process(move |stream, udata| {
+                match stream.dequeue_buffer() {
+                    None => debug!("out of buffers"),
+                    Some(mut buffer) => {
+                        // Wait until audio is streaming before we try to process
+                        if !udata.audio_ready.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
+
+                        let datas = buffer.datas_mut();
+                        if datas.is_empty() {
+                            return;
+                        }
+
+                        let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
+                            elapsed.as_micros() as i64
+                        } else {
+                            0
+                        };
+
+                        // send frame data to encoder
+                        let data = &mut datas[0];
+                        if let Some(frame) = data.data() {
+                            process_video_callback
+                                .blocking_send((frame.to_vec(), time_ms))
+                                .unwrap();
+                        }
+                    }
+                }
+            })
+            .register()?;
+
         let _video_stream_listener = video_stream
             .add_local_listener_with_user_data(data)
-            .state_changed(|_, _, old, new| {
-                debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
-            })
             .param_changed(|_, user_data, id, param| {
                 let Some(param) = param else {
                     return;
@@ -120,29 +180,6 @@ impl PipewireCapture {
                     user_data.video_format.framerate().num,
                     user_data.video_format.framerate().denom
                 );
-            })
-            .process(move |stream, udata| {
-                match stream.dequeue_buffer() {
-                    None => debug!("out of buffers"),
-                    Some(mut buffer) => {
-                        let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
-                            elapsed.as_micros() as i64
-                        } else {
-                            0
-                        };
-
-                        let datas = buffer.datas_mut();
-                        if datas.is_empty() {
-                            return;
-                        }
-
-                        // send frame data to encoder
-                        let data = &mut datas[0];
-                        if let Some(frame) = data.data() {
-                            process_video_callback.blocking_send((frame.to_vec(), time_ms)).unwrap();
-                        }
-                    }
-                }
             })
             .register()?;
 
@@ -231,11 +268,50 @@ impl PipewireCapture {
             },
         )?;
 
+        let _audio_stream_shared_data_listener = audio_stream
+            .add_local_listener_with_user_data(shared_state)
+            .state_changed(|_, udata, old, new| {
+                debug!("Audio Stream State Changed: {0:?} -> {1:?}", old, new);
+                udata.audio_ready.store(
+                    new == StreamState::Streaming,
+                    std::sync::atomic::Ordering::Release,
+                );
+            })
+            .process(move |stream, udata| match stream.dequeue_buffer() {
+                None => debug!("Out of audio buffers"),
+                Some(mut buffer) => {
+                    let datas = buffer.datas_mut();
+                    if datas.is_empty() {
+                        return;
+                    }
+
+                    // Wait until video is streaming before we try to process
+                    if !udata.video_ready.load(std::sync::atomic::Ordering::Acquire) {
+                        return;
+                    }
+
+                    let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
+                        elapsed.as_micros() as i64
+                    } else {
+                        0
+                    };
+
+                    let data = &mut datas[0];
+                    let n_samples = data.chunk().size() / (std::mem::size_of::<f32>()) as u32;
+
+                    if let Some(samples) = data.data() {
+                        let samples_f32: &[f32] = bytemuck::cast_slice(samples);
+                        let audio_samples = &samples_f32[..n_samples as usize];
+                        process_audio_callback
+                            .blocking_send((audio_samples.to_vec(), time_ms))
+                            .unwrap();
+                    }
+                }
+            })
+            .register()?;
+
         let _audio_stream_listener = audio_stream
             .add_local_listener_with_user_data(data)
-            .state_changed(|_, _, old, new| {
-                debug!("Audio Stream State Changed: {0:?} -> {1:?}", old, new);
-            })
             .param_changed(|_, udata, id, param| {
                 let Some(param) = param else {
                     return;
@@ -266,30 +342,6 @@ impl PipewireCapture {
                     udata.audio_format.channels(),
                     udata.audio_format.format().as_raw()
                 );
-            })
-            .process(move |stream, udata| match stream.dequeue_buffer() {
-                None => debug!("Out of audio buffers"),
-                Some(mut buffer) => {
-                    let datas = buffer.datas_mut();
-                    if datas.is_empty() {
-                        return;
-                    }
-
-                    let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
-                        elapsed.as_micros() as i64
-                    } else {
-                        0
-                    };
-
-                    let data = &mut datas[0];
-                    let n_samples = data.chunk().size() / (std::mem::size_of::<f32>()) as u32;
-
-                    if let Some(samples) = data.data() {
-                        let samples_f32: &[f32] = bytemuck::cast_slice(samples);
-                        let audio_samples = &samples_f32[..n_samples as usize];
-                        process_audio_callback.blocking_send((audio_samples.to_vec(), time_ms)).unwrap();
-                    }
-                }
             })
             .register()?;
 

@@ -4,6 +4,7 @@ use ffmpeg_next::{self as ffmpeg, Rational};
 
 use super::video_encoder::ONE_MILLIS;
 
+// Need to twek these
 const MIN_AUDIO_VOLUME: f32 = 0.2;
 const MAX_AUDIO_VOLUME: f32 = 0.8;
 
@@ -75,7 +76,7 @@ impl AudioEncoder {
         let mut mut_audio = Vec::from(audio);
         self.normalize_audio_volume(&mut mut_audio, MIN_AUDIO_VOLUME, MAX_AUDIO_VOLUME);
 
-        self.leftover_data.extend(audio.iter().copied());
+        self.leftover_data.extend(mut_audio.iter().copied());
 
         while self.leftover_data.len() >= frame_size {
             while let Some(oldest_video) = self.audio_buffer.front() {

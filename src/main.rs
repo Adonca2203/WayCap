@@ -68,12 +68,15 @@ async fn main() -> Result<(), Error> {
     loop {
         tokio::select! {
             _ = save_rx.recv() => {
-                let video_lock = video_encoder.lock().await;
+                let (video_lock, audio_lock) = tokio::join!(
+                    video_encoder.lock(),
+                    audio_encoder.lock()
+                );
+
                 let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
                 let video_buffer = video_lock.get_buffer().await;
                 let video_encoder = video_lock.get_encoder().await;
 
-                let audio_lock = audio_encoder.lock().await;
                 let audio_buffer = audio_lock.get_buffer().await;
                 let audio_encoder = audio_lock.get_encoder().await;
 
@@ -122,6 +125,10 @@ fn save_buffer(
     }
 
     // Align audio buffer timestamp to video buffer
+    // 
+    // This is probably no longer needed now that Audio and Video wait for both
+    // to be in streaming state before beginning to process
+    // so they should be in sync by this point
     while let Some(audio_frame) = audio_buffer.front() {
         if let Some(video_frame) = video_buffer.front() {
             if audio_frame.capture_time < video_frame.capture_time {
