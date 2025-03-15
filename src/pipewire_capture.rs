@@ -62,6 +62,7 @@ impl PipewireCapture {
         stream_node: u32,
         process_video_callback: mpsc::Sender<(Vec<u8>, i64)>,
         process_audio_callback: mpsc::Sender<(Vec<f32>, i64)>,
+        use_mic: bool,
     ) -> Result<Self, pipewire::Error> {
         pw::init();
         let pw_loop = MainLoop::new(None)?;
@@ -85,21 +86,6 @@ impl PipewireCapture {
             .info(|i| info!("AUDIO CORE:\n{0:#?}", i))
             .error(|e, f, g, h| error!("{0},{1},{2},{3}", e, f, g, h))
             .done(|d, _| info!("DONE: {0}", d))
-            .register();
-
-        let audio_registry = audio_core.get_registry()?;
-
-        let default_sink = get_default_sink_name();
-        debug!("Default sink: {:?}", default_sink);
-        let _audio_global_listener = audio_registry
-            .add_listener_local()
-            .global(move |global| {
-                if let Some(props) = &global.props {
-                    if props.get("node.name") == default_sink.as_deref() {
-                        debug!("Props of default:\n{:?}",props);
-                    }
-                }
-            })
             .register();
 
         // Set up video stream
@@ -390,12 +376,22 @@ impl PipewireCapture {
         .into_inner();
 
         let mut audio_params = [Pod::from_bytes(&audio_spa_values).unwrap()];
+
+        let default_sink_id = if !use_mic {
+            get_default_sink_node_id()
+        } else {
+            Some(stream_node)
+        };
+
+        debug!("Default sink id: {:?}", default_sink_id);
         audio_stream.connect(
             Direction::Input,
-            Some(stream_node),
+            default_sink_id,
             StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
             &mut audio_params,
         )?;
+
+        debug!("Audio Stream: {:?}", audio_stream);
 
         pw_loop.run();
 
@@ -403,16 +399,18 @@ impl PipewireCapture {
     }
 }
 
-fn get_default_sink_name() -> Option<String> {
+fn get_default_sink_node_id() -> Option<u32> {
     let output = Command::new("sh")
         .arg("-c")
-        .arg("pactl info | grep 'Default Sink:'")
+        .arg(r#"pactl list sinks | awk -v sink="$(pactl info | grep 'Default Sink' | cut -d' ' -f3)" '$0 ~ "Name: " sink { found=1 } found && /object.id/ { print $NF; exit }'"#)
         .output()
-        .ok()?;
+        .expect("Failed to execute command");
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
-    stdout.strip_prefix("Default Sink: ").map(|s| s.trim().to_string())
+    let cleaned = stdout.replace('"', "");
+
+    cleaned.trim().parse::<u32>().ok()
 }
 
 impl Drop for PipewireCapture {

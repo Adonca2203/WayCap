@@ -16,11 +16,13 @@ use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
 
+// Most if not all of these should be customizeable via a conf file
 const NVENC: &str = "h264_nvenc";
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
 const TARGET_FPS: usize = 60;
 const MAX_SECONDS: usize = 300;
+const USE_MIC: bool = false;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -60,7 +62,8 @@ async fn main() -> Result<(), Error> {
 
     std::thread::spawn(move || {
         debug!("Creating pipewire stream");
-        let _capture = PipewireCapture::new(fd, stream_node, video_sender, audio_sender).unwrap();
+        let _capture =
+            PipewireCapture::new(fd, stream_node, video_sender, audio_sender, USE_MIC).unwrap();
     });
 
     // Main event loop
@@ -124,7 +127,7 @@ fn save_buffer(
     }
 
     // Align audio buffer timestamp to video buffer
-    // 
+    //
     // This is probably no longer needed now that Audio and Video wait for both
     // to be in streaming state before beginning to process
     // so they should be in sync by this point
