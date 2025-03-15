@@ -19,6 +19,8 @@ use zbus::connection;
 const NVENC: &str = "h264_nvenc";
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
+const TARGET_FPS: usize = 60;
+const MAX_SECONDS: usize = 300;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -33,9 +35,6 @@ async fn main() -> Result<(), Error> {
     let stream = screen_cast.streams().next().unwrap();
     let stream_node = stream.pipewire_node();
     let (width, height) = stream.size();
-
-    let target_fps = 60;
-    let max_seconds = 300;
 
     let (save_tx, mut save_rx) = mpsc::channel(1);
     let clip_service = dbus::ClipService::new(save_tx);
@@ -53,11 +52,11 @@ async fn main() -> Result<(), Error> {
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
         height,
-        target_fps,
-        max_seconds,
+        TARGET_FPS as u32,
+        MAX_SECONDS as u32,
         NVENC,
     )?));
-    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(max_seconds)?));
+    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(MAX_SECONDS as u32)?));
 
     std::thread::spawn(move || {
         debug!("Creating pipewire stream");

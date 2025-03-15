@@ -1,5 +1,6 @@
 use std::{
     os::fd::{FromRawFd, OwnedFd, RawFd},
+    process::Command,
     sync::{atomic::AtomicBool, Arc},
     time::SystemTime,
 };
@@ -84,6 +85,21 @@ impl PipewireCapture {
             .info(|i| info!("AUDIO CORE:\n{0:#?}", i))
             .error(|e, f, g, h| error!("{0},{1},{2},{3}", e, f, g, h))
             .done(|d, _| info!("DONE: {0}", d))
+            .register();
+
+        let audio_registry = audio_core.get_registry()?;
+
+        let default_sink = get_default_sink_name();
+        debug!("Default sink: {:?}", default_sink);
+        let _audio_global_listener = audio_registry
+            .add_listener_local()
+            .global(move |global| {
+                if let Some(props) = &global.props {
+                    if props.get("node.name") == default_sink.as_deref() {
+                        debug!("Props of default:\n{:?}",props);
+                    }
+                }
+            })
             .register();
 
         // Set up video stream
@@ -385,6 +401,18 @@ impl PipewireCapture {
 
         Ok(Self { main_loop: pw_loop })
     }
+}
+
+fn get_default_sink_name() -> Option<String> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("pactl info | grep 'Default Sink:'")
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    stdout.strip_prefix("Default Sink: ").map(|s| s.trim().to_string())
 }
 
 impl Drop for PipewireCapture {
