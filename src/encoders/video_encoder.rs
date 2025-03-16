@@ -186,6 +186,8 @@ fn create_encoder(
         .encoder()
         .video()?;
 
+    // The quality still doesn't look amazing not sure if encoding issue
+    // or something I need to do on pipewire end?
     encoder_ctx.set_width(width);
     encoder_ctx.set_height(height);
     encoder_ctx.set_format(ffmpeg::format::Pixel::NV12);

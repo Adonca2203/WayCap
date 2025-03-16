@@ -377,16 +377,16 @@ impl PipewireCapture {
 
         let mut audio_params = [Pod::from_bytes(&audio_spa_values).unwrap()];
 
-        let default_sink_id = if !use_mic {
+        let sink_id_to_use = if !use_mic {
             get_default_sink_node_id()
         } else {
             Some(stream_node)
         };
 
-        debug!("Default sink id: {:?}", default_sink_id);
+        debug!("Default sink id: {:?}", sink_id_to_use);
         audio_stream.connect(
             Direction::Input,
-            default_sink_id,
+            sink_id_to_use,
             StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
             &mut audio_params,
         )?;

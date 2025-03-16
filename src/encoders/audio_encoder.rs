@@ -5,7 +5,7 @@ use ffmpeg_next::{self as ffmpeg, Rational};
 use super::video_encoder::ONE_MILLIS;
 
 // Need to twek these
-const MIN_AUDIO_VOLUME: f32 = 0.2;
+const MIN_AUDIO_VOLUME: f32 = 0.1;
 const MAX_AUDIO_VOLUME: f32 = 0.8;
 
 #[derive(Clone, Debug)]
