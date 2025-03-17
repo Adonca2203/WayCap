@@ -45,6 +45,7 @@ impl VideoEncoder {
         max_buffer_seconds: u32,
         encoder_name: &str,
     ) -> Result<Self, ffmpeg::Error> {
+        ffmpeg::log::set_level(ffmpeg_next::log::Level::Debug);
         ffmpeg::init()?;
 
         let encoder = create_encoder(width, height, target_fps, encoder_name)?;
@@ -61,16 +62,16 @@ impl VideoEncoder {
 
     pub fn process(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
         // Throttle to target input framerate
-        if let Some(last_time) = self.last_frame_time {
-            let elapsed = time_micro - last_time;
-            if elapsed < self.frame_interval {
-                debug!(
-                    "Discarding this frame. \nElapsed: {}\nFrame Interval: {}",
-                    elapsed, self.frame_interval
-                );
-                return Ok(());
-            }
-        }
+        // if let Some(last_time) = self.last_frame_time {
+        //     let elapsed = time_micro - last_time;
+        //     if elapsed < self.frame_interval {
+        //         debug!(
+        //             "Discarding this frame. \nElapsed: {}\nFrame Interval: {}",
+        //             elapsed, self.frame_interval
+        //         );
+        //         return Ok(());
+        //     }
+        // }
 
         self.last_frame_time = Some(time_micro);
 
@@ -153,11 +154,8 @@ fn create_encoder(
     encoder_ctx.set_width(width);
     encoder_ctx.set_height(height);
     encoder_ctx.set_format(ffmpeg::format::Pixel::BGRA);
-    encoder_ctx.set_frame_rate(Some(Rational::new(target_fps as i32, 1)));
-
+    encoder_ctx.set_bit_rate(100_000_000);
     // These should be part of a config file
-    encoder_ctx.set_bit_rate(12_000_000);
-    encoder_ctx.set_max_bit_rate(16_000_000);
     encoder_ctx.set_time_base(Rational::new(1, 1_000_000));
 
     // Needed to insert I-Frames more frequently so we don't lose full seconds
@@ -167,7 +165,14 @@ fn create_encoder(
     let encoder_params = ffmpeg::codec::Parameters::new();
 
     encoder_ctx.set_parameters(encoder_params)?;
-    let encoder = encoder_ctx.open()?;
+
+    let mut opts = ffmpeg::Dictionary::new();
+    opts.set("preset", "p7");
+    opts.set("rc", "vbr");
+    opts.set("cq", "0");
+    opts.set("lossless", "1");
+
+    let encoder = encoder_ctx.open_with(opts)?;
 
     Ok(encoder)
 }

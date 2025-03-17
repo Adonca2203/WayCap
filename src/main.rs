@@ -108,13 +108,11 @@ fn save_buffer(
 
     let video_codec = video_encoder.codec().unwrap();
     let mut video_stream = output.add_stream(video_codec)?;
-    video_stream.set_rate(video_encoder.frame_rate());
     video_stream.set_time_base(video_encoder.time_base());
     video_stream.set_parameters(&video_encoder);
 
     let audio_codec = audio_encoder.codec().unwrap();
     let mut audio_stream = output.add_stream(audio_codec)?;
-    audio_stream.set_rate(audio_encoder.frame_rate());
     audio_stream.set_time_base(audio_encoder.time_base());
     audio_stream.set_parameters(&audio_encoder);
 
