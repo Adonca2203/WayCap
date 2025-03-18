@@ -1,9 +1,16 @@
-use std::collections::VecDeque;
+use std::{cell::RefCell, collections::VecDeque};
 
-use ffmpeg_next::{self as ffmpeg, Rational};
+use ffmpeg_next::{
+    self as ffmpeg,
+    software::scaling::{Context as Scaler, Flags},
+    Rational,
+};
 use log::debug;
 
 pub const ONE_MILLIS: usize = 1_000_000;
+thread_local! {
+    static SCALER: RefCell<Option<Scaler>> = RefCell::new(None);
+}
 
 #[derive(Clone, Debug)]
 pub struct VideoFrameData {
@@ -75,54 +82,85 @@ impl VideoEncoder {
 
         self.last_frame_time = Some(time_micro);
 
-        let mut frame_data = VideoFrameData::new();
-        frame_data.set_capture_time(time_micro);
+        SCALER.with(|scaler_cell| {
+            let mut scaler = scaler_cell.borrow_mut();
+            if scaler.is_none() {
+                *scaler = Some(
+                    Scaler::get(
+                        ffmpeg_next::format::Pixel::BGRA,
+                        self.encoder.width(),
+                        self.encoder.height(),
+                        ffmpeg_next::format::Pixel::YUV444P,
+                        self.encoder.width(),
+                        self.encoder.height(),
+                        Flags::BILINEAR,
+                    )
+                    .unwrap(),
+                );
+            }
 
-        let mut src_frame = ffmpeg::util::frame::video::Video::new(
-            ffmpeg_next::format::Pixel::BGRA,
-            self.encoder.width(),
-            self.encoder.height(),
-        );
+            let mut frame_data = VideoFrameData::new();
+            frame_data.set_capture_time(time_micro);
 
-        src_frame.set_pts(Some(time_micro));
-        src_frame.data_mut(0).copy_from_slice(frame);
+            let mut src_frame = ffmpeg::util::frame::video::Video::new(
+                ffmpeg_next::format::Pixel::BGRA,
+                self.encoder.width(),
+                self.encoder.height(),
+            );
 
-        self.encoder.send_frame(&src_frame).unwrap();
+            src_frame.set_pts(Some(time_micro));
+            src_frame.data_mut(0).copy_from_slice(frame);
 
-        let mut packet = ffmpeg::codec::packet::Packet::empty();
-        if self.encoder.receive_packet(&mut packet).is_ok() {
-            if let Some(data) = packet.data() {
-                frame_data.set_frame_bytes(data.to_vec());
+            // Create destination frame in NV12 format
+            let mut dst_frame = ffmpeg::util::frame::video::Video::new(
+                ffmpeg_next::format::Pixel::NV12,
+                self.encoder.width(),
+                self.encoder.height(),
+            );
+            dst_frame.set_pts(Some(time_micro));
+            scaler
+                .as_mut()
+                .unwrap()
+                .run(&src_frame, &mut dst_frame)
+                .unwrap();
 
-                // Keep the buffer to max
-                while let Some(oldest) = self.video_buffer.front() {
-                    if let Some(newest) = self.video_buffer.back() {
-                        if newest.capture_time - oldest.capture_time >= self.max_time as i64
-                            && self.keyframe_indexes.len() > 0
-                        {
-                            debug!("{:?}", self.keyframe_indexes);
-                            let drained = self
-                                .video_buffer
-                                .drain(0..self.keyframe_indexes[0] as usize);
+            self.encoder.send_frame(&dst_frame).unwrap();
 
-                            self.keyframe_indexes
-                                .iter_mut()
-                                .for_each(|index| *index -= drained.len());
-                            self.keyframe_indexes.retain(|&index| index != 0);
+            let mut packet = ffmpeg::codec::packet::Packet::empty();
+            if self.encoder.receive_packet(&mut packet).is_ok() {
+                if let Some(data) = packet.data() {
+                    frame_data.set_frame_bytes(data.to_vec());
 
-                            debug!("Drained {} frames.", drained.len());
-                        } else {
-                            break;
+                    // Keep the buffer to max
+                    while let Some(oldest) = self.video_buffer.front() {
+                        if let Some(newest) = self.video_buffer.back() {
+                            if newest.capture_time - oldest.capture_time >= self.max_time as i64
+                                && self.keyframe_indexes.len() > 0
+                            {
+                                debug!("{:?}", self.keyframe_indexes);
+                                let drained = self
+                                    .video_buffer
+                                    .drain(0..self.keyframe_indexes[0] as usize);
+
+                                self.keyframe_indexes
+                                    .iter_mut()
+                                    .for_each(|index| *index -= drained.len());
+                                self.keyframe_indexes.retain(|&index| index != 0);
+
+                                debug!("Drained {} frames.", drained.len());
+                            } else {
+                                break;
+                            }
                         }
                     }
-                }
 
-                self.video_buffer.push_back(frame_data);
-                if packet.is_key() && self.video_buffer.len() > 1 {
-                    self.keyframe_indexes.push_back(self.video_buffer.len() - 1);
-                }
-            };
-        }
+                    self.video_buffer.push_back(frame_data);
+                    if packet.is_key() && self.video_buffer.len() > 1 {
+                        self.keyframe_indexes.push_back(self.video_buffer.len() - 1);
+                    }
+                };
+            }
+        });
 
         Ok(())
     }
@@ -153,8 +191,8 @@ fn create_encoder(
     // or something I need to do on pipewire end?
     encoder_ctx.set_width(width);
     encoder_ctx.set_height(height);
-    encoder_ctx.set_format(ffmpeg::format::Pixel::BGRA);
     encoder_ctx.set_bit_rate(100_000_000);
+    encoder_ctx.set_format(ffmpeg::format::Pixel::YUV444P);
     // These should be part of a config file
     encoder_ctx.set_time_base(Rational::new(1, 1_000_000));
 
