@@ -124,21 +124,6 @@ fn save_buffer(
         return Err(err);
     }
 
-    // Align audio buffer timestamp to video buffer
-    //
-    // This is probably no longer needed now that Audio and Video wait for both
-    // to be in streaming state before beginning to process
-    // so they should be in sync by this point
-    while let Some(audio_frame) = audio_buffer.front() {
-        if let Some(video_frame) = video_buffer.front() {
-            if audio_frame.capture_time < video_frame.capture_time {
-                audio_buffer.pop_front();
-                continue;
-            }
-        }
-        break;
-    }
-
     if let Some(oldest_video) = video_buffer.back() {
         if let Some(oldest_audio) = audio_buffer.back() {
             debug!(
