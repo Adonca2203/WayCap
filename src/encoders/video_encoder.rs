@@ -45,6 +45,7 @@ impl VideoEncoder {
         max_buffer_seconds: u32,
         encoder_name: &str,
     ) -> Result<Self, ffmpeg::Error> {
+        ffmpeg::log::set_level(ffmpeg_next::log::Level::Debug);
         ffmpeg::init()?;
 
         let encoder = create_encoder(width, height, target_fps, encoder_name)?;
@@ -153,7 +154,7 @@ fn create_encoder(
     encoder_ctx.set_width(width);
     encoder_ctx.set_height(height);
     encoder_ctx.set_format(ffmpeg::format::Pixel::BGRA);
-    encoder_ctx.set_frame_rate(Some(Rational::new(target_fps as i32, 1)));
+    encoder_ctx.set_frame_rate(Some(Rational::new(1, 60)));
 
     // These should be part of a config file
     encoder_ctx.set_bit_rate(12_000_000);
@@ -165,9 +166,11 @@ fn create_encoder(
     encoder_ctx.set_gop(30);
 
     let encoder_params = ffmpeg::codec::Parameters::new();
+    let mut opts = ffmpeg::Dictionary::new();
+    opts.set("vsync", "vfr");
 
     encoder_ctx.set_parameters(encoder_params)?;
-    let encoder = encoder_ctx.open()?;
+    let encoder = encoder_ctx.open_with(opts)?;
 
     Ok(encoder)
 }

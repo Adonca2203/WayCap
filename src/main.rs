@@ -108,13 +108,11 @@ fn save_buffer(
 
     let video_codec = video_encoder.codec().unwrap();
     let mut video_stream = output.add_stream(video_codec)?;
-    video_stream.set_rate(video_encoder.frame_rate());
     video_stream.set_time_base(video_encoder.time_base());
     video_stream.set_parameters(&video_encoder);
 
     let audio_codec = audio_encoder.codec().unwrap();
     let mut audio_stream = output.add_stream(audio_codec)?;
-    audio_stream.set_rate(audio_encoder.frame_rate());
     audio_stream.set_time_base(audio_encoder.time_base());
     audio_stream.set_parameters(&audio_encoder);
 
@@ -124,21 +122,6 @@ fn save_buffer(
             err
         );
         return Err(err);
-    }
-
-    // Align audio buffer timestamp to video buffer
-    //
-    // This is probably no longer needed now that Audio and Video wait for both
-    // to be in streaming state before beginning to process
-    // so they should be in sync by this point
-    while let Some(audio_frame) = audio_buffer.front() {
-        if let Some(video_frame) = video_buffer.front() {
-            if audio_frame.capture_time < video_frame.capture_time {
-                audio_buffer.pop_front();
-                continue;
-            }
-        }
-        break;
     }
 
     if let Some(oldest_video) = video_buffer.back() {
