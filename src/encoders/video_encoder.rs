@@ -47,6 +47,14 @@ impl FrameBuffer {
             .min()
     }
 
+    pub fn get_last_gop_start(&self) -> i64 {
+        for (dts, frame) in self.frames.iter().rev() {
+            if frame.is_key {
+                return *dts
+            }
+        }
+        -1
+    }
     fn trim_oldest_gop(&mut self) {
         let mut first_key_frame = true;
         for _ in 0..self.frames.len() {
