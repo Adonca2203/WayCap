@@ -36,19 +36,15 @@ impl FrameBuffer {
     }
 
     pub fn newest_pts(&self) -> Option<i64> {
-        self.frames
-            .keys()
-            .next_back()
-            .and_then(|key| self.frames.get(key))
+        self.frames.values()
             .map(|frame| frame.pts)
+            .max()
     }
 
     pub fn oldest_pts(&self) -> Option<i64> {
-        self.frames
-            .keys()
-            .next()
-            .and_then(|key| self.frames.get(key))
+        self.frames.values()
             .map(|frame| frame.pts)
+            .min()
     }
 
     fn trim_oldest_gop(&mut self) {
