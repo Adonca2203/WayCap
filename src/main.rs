@@ -7,7 +7,7 @@ use std::{collections::VecDeque, sync::Arc};
 use anyhow::{Error, Result};
 use encoders::{
     audio_encoder::{AudioEncoder, AudioFrameData},
-    video_encoder::{VideoEncoder, VideoFrameData},
+    video_encoder::{FrameBuffer, VideoEncoder},
 };
 use ffmpeg_next::{self as ffmpeg};
 use log::{debug, LevelFilter};
@@ -20,7 +20,6 @@ use zbus::connection;
 const NVENC: &str = "h264_nvenc";
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
-const TARGET_FPS: usize = 60;
 const MAX_SECONDS: usize = 300;
 const USE_MIC: bool = false;
 
@@ -54,7 +53,6 @@ async fn main() -> Result<(), Error> {
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
         height,
-        TARGET_FPS as u32,
         MAX_SECONDS as u32,
         NVENC,
     )?));
@@ -70,20 +68,23 @@ async fn main() -> Result<(), Error> {
     loop {
         tokio::select! {
             _ = save_rx.recv() => {
-                let (video_lock, audio_lock) = tokio::join!(
+                // Stop capturing video and audio by taking out the lock
+                let (mut video_lock, audio_lock) = tokio::join!(
                     video_encoder.lock(),
                     audio_encoder.lock()
                 );
 
+                video_lock.drain()?;
                 let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
-                let video_buffer = video_lock.get_buffer().await;
-                let video_encoder = video_lock.get_encoder().await;
+                let video_buffer = video_lock.get_buffer();
+                let video_encoder = video_lock.get_encoder();
 
-                let audio_buffer = audio_lock.get_buffer().await;
-                let audio_encoder = audio_lock.get_encoder().await;
+                let audio_buffer = audio_lock.get_buffer();
+                let audio_encoder = audio_lock.get_encoder();
 
                 save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
 
+                debug!("Done saving!");
                 drop(video_lock);
                 drop(audio_lock);
             },
@@ -99,9 +100,9 @@ async fn main() -> Result<(), Error> {
 
 fn save_buffer(
     filename: &str,
-    video_buffer: VecDeque<VideoFrameData>,
+    video_buffer: FrameBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
-    mut audio_buffer: VecDeque<AudioFrameData>,
+    audio_buffer: VecDeque<AudioFrameData>,
     audio_encoder: &ffmpeg::codec::encoder::Audio,
 ) -> Result<(), ffmpeg::Error> {
     let mut output = ffmpeg::format::output(&filename)?;
@@ -124,29 +125,23 @@ fn save_buffer(
         return Err(err);
     }
 
-    if let Some(oldest_video) = video_buffer.back() {
-        if let Some(oldest_audio) = audio_buffer.back() {
-            debug!(
-                "Newest Vid TS: {}, Audio TS: {}",
-                oldest_video.capture_time, oldest_audio.capture_time
-            );
-        }
-    }
-
     // Write video
-    let first_frame_offset = video_buffer.front().unwrap().capture_time;
-    for frame in video_buffer {
-        let offset = frame.capture_time - first_frame_offset;
+    let first_pts_offset = video_buffer.oldest_pts().unwrap_or(0);
+    let mut dts_num = 0;
+    for (_, frame_data) in video_buffer.frames {
+        let pts_offset = frame_data.pts - first_pts_offset;
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.frame_bytes);
-        packet.set_pts(Some(offset));
-        packet.set_dts(Some(offset));
+        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame_data.frame_bytes);
+        packet.set_pts(Some(pts_offset));
+        packet.set_dts(Some(dts_num));
 
         packet.set_stream(VIDEO_STREAM);
 
         packet
             .write_interleaved(&mut output)
             .expect("Could not write video interleaved");
+
+        dts_num += 1;
     }
 
     // Write audio

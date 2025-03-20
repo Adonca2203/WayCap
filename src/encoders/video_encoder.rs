@@ -1,39 +1,81 @@
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 
 use ffmpeg_next::{self as ffmpeg, Rational};
-use log::debug;
 
 pub const ONE_MILLIS: usize = 1_000_000;
+const GOP_SIZE: u32 = 30;
 
 #[derive(Clone, Debug)]
 pub struct VideoFrameData {
     pub frame_bytes: Vec<u8>,
-    pub capture_time: i64,
+    pub pts: i64,
+    is_key: bool,
 }
 
 pub struct VideoEncoder {
     encoder: ffmpeg::codec::encoder::Video,
-    video_buffer: VecDeque<VideoFrameData>,
+    video_buffer: FrameBuffer,
     max_time: usize,
-    keyframe_indexes: VecDeque<usize>,
-    last_frame_time: Option<i64>,
-    frame_interval: i64,
 }
 
-impl VideoFrameData {
+#[derive(Clone)]
+pub struct FrameBuffer {
+    /// Maps Frames by DTS -> Frame Information so it is ordered properly at muxing time
+    pub frames: BTreeMap<i64, VideoFrameData>,
+}
+
+impl FrameBuffer {
     fn new() -> Self {
         Self {
-            frame_bytes: Vec::new(),
-            capture_time: 0,
+            frames: BTreeMap::new(),
         }
     }
 
-    fn set_frame_bytes(&mut self, data: Vec<u8>) {
-        self.frame_bytes = data;
+    fn insert(&mut self, timestamp: i64, frame: VideoFrameData) {
+        self.frames.insert(timestamp, frame);
     }
 
-    fn set_capture_time(&mut self, time: i64) {
-        self.capture_time = time;
+    pub fn newest_pts(&self) -> Option<i64> {
+        self.frames
+            .keys()
+            .next_back()
+            .and_then(|key| self.frames.get(key))
+            .map(|frame| frame.pts)
+    }
+
+    pub fn oldest_pts(&self) -> Option<i64> {
+        self.frames
+            .keys()
+            .next()
+            .and_then(|key| self.frames.get(key))
+            .map(|frame| frame.pts)
+    }
+
+    fn trim_oldest_gop(&mut self) {
+        let mut first_key_frame = true;
+        for _ in 0..self.frames.len() {
+            if let Some((&oldest, frame)) = self.frames.iter().next() {
+                if frame.is_key && !first_key_frame {
+                    break;
+                } else {
+                    first_key_frame = false;
+                }
+
+                self.frames.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+impl VideoFrameData {
+    fn new(frame_bytes: Vec<u8>, is_key: bool, dts: i64) -> Self {
+        Self {
+            frame_bytes,
+            is_key,
+            pts: dts,
+        }
     }
 }
 
@@ -41,43 +83,21 @@ impl VideoEncoder {
     pub fn new(
         width: u32,
         height: u32,
-        target_fps: u32,
         max_buffer_seconds: u32,
         encoder_name: &str,
     ) -> Result<Self, ffmpeg::Error> {
-        ffmpeg::log::set_level(ffmpeg_next::log::Level::Debug);
         ffmpeg::init()?;
 
-        let encoder = create_encoder(width, height, target_fps, encoder_name)?;
+        let encoder = create_encoder(width, height, encoder_name)?;
 
         Ok(Self {
             encoder,
-            video_buffer: VecDeque::new(),
+            video_buffer: FrameBuffer::new(),
             max_time: (max_buffer_seconds as usize * ONE_MILLIS),
-            keyframe_indexes: VecDeque::new(),
-            last_frame_time: None,
-            frame_interval: ONE_MILLIS as i64 / target_fps as i64,
         })
     }
 
     pub fn process(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
-        // Throttle to target input framerate
-        // if let Some(last_time) = self.last_frame_time {
-        //     let elapsed = time_micro - last_time;
-        //     if elapsed < self.frame_interval {
-        //         debug!(
-        //             "Discarding this frame. \nElapsed: {}\nFrame Interval: {}",
-        //             elapsed, self.frame_interval
-        //         );
-        //         return Ok(());
-        //     }
-        // }
-
-        self.last_frame_time = Some(time_micro);
-
-        let mut frame_data = VideoFrameData::new();
-        frame_data.set_capture_time(time_micro);
-
         let mut src_frame = ffmpeg::util::frame::video::Video::new(
             ffmpeg_next::format::Pixel::BGRA,
             self.encoder.width(),
@@ -92,34 +112,21 @@ impl VideoEncoder {
         let mut packet = ffmpeg::codec::packet::Packet::empty();
         if self.encoder.receive_packet(&mut packet).is_ok() {
             if let Some(data) = packet.data() {
-                frame_data.set_frame_bytes(data.to_vec());
+                let frame_data =
+                    VideoFrameData::new(data.to_vec(), packet.is_key(), packet.pts().unwrap_or(0));
+
+                self.video_buffer
+                    .insert(packet.dts().unwrap_or(0), frame_data);
 
                 // Keep the buffer to max
-                while let Some(oldest) = self.video_buffer.front() {
-                    if let Some(newest) = self.video_buffer.back() {
-                        if newest.capture_time - oldest.capture_time >= self.max_time as i64
-                            && self.keyframe_indexes.len() > 0
-                        {
-                            debug!("{:?}", self.keyframe_indexes);
-                            let drained = self
-                                .video_buffer
-                                .drain(0..self.keyframe_indexes[0] as usize);
-
-                            self.keyframe_indexes
-                                .iter_mut()
-                                .for_each(|index| *index -= drained.len());
-                            self.keyframe_indexes.retain(|&index| index != 0);
-
-                            debug!("Drained {} frames.", drained.len());
+                while let Some(oldest) = self.video_buffer.oldest_pts() {
+                    if let Some(newest) = self.video_buffer.newest_pts() {
+                        if newest - oldest >= self.max_time as i64 {
+                            self.video_buffer.trim_oldest_gop();
                         } else {
                             break;
                         }
                     }
-                }
-
-                self.video_buffer.push_back(frame_data);
-                if packet.is_key() && self.video_buffer.len() > 1 {
-                    self.keyframe_indexes.push_back(self.video_buffer.len() - 1);
                 }
             };
         }
@@ -127,11 +134,39 @@ impl VideoEncoder {
         Ok(())
     }
 
-    pub async fn get_encoder(&self) -> &ffmpeg::codec::encoder::Video {
+    /// Drain the encoder of any remaining frames it is processing
+    pub fn drain(&mut self) -> Result<(), ffmpeg::Error> {
+        let mut packet = ffmpeg::codec::packet::Packet::empty();
+        while self.encoder.receive_packet(&mut packet).is_ok() {
+            if let Some(data) = packet.data() {
+                let frame_data =
+                    VideoFrameData::new(data.to_vec(), packet.is_key(), packet.pts().unwrap_or(0));
+
+                self.video_buffer
+                    .insert(packet.dts().unwrap_or(0), frame_data);
+
+                // Keep the buffer to max
+                while let Some(oldest) = self.video_buffer.oldest_pts() {
+                    if let Some(newest) = self.video_buffer.newest_pts() {
+                        if newest - oldest >= self.max_time as i64 {
+                            self.video_buffer.trim_oldest_gop();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            };
+            packet = ffmpeg::codec::packet::Packet::empty();
+        }
+        
+        Ok(())
+    }
+
+    pub fn get_encoder(&self) -> &ffmpeg::codec::encoder::Video {
         &self.encoder
     }
 
-    pub async fn get_buffer(&self) -> VecDeque<VideoFrameData> {
+    pub fn get_buffer(&self) -> FrameBuffer {
         self.video_buffer.clone()
     }
 }
@@ -139,7 +174,6 @@ impl VideoEncoder {
 fn create_encoder(
     width: u32,
     height: u32,
-    target_fps: u32,
     encoder_name: &str,
 ) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
     let encoder_codec =
@@ -163,7 +197,7 @@ fn create_encoder(
 
     // Needed to insert I-Frames more frequently so we don't lose full seconds
     // when popping frames from the front
-    encoder_ctx.set_gop(30);
+    encoder_ctx.set_gop(GOP_SIZE);
 
     let encoder_params = ffmpeg::codec::Parameters::new();
     let mut opts = ffmpeg::Dictionary::new();

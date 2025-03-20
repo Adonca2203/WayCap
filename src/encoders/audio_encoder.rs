@@ -133,11 +133,11 @@ impl AudioEncoder {
         }
     }
 
-    pub async fn get_encoder(&self) -> &ffmpeg::codec::encoder::Audio {
+    pub fn get_encoder(&self) -> &ffmpeg::codec::encoder::Audio {
         &self.encoder
     }
 
-    pub async fn get_buffer(&self) -> VecDeque<AudioFrameData> {
+    pub fn get_buffer(&self) -> VecDeque<AudioFrameData> {
         self.audio_buffer.clone()
     }
 }
