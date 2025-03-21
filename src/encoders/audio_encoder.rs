@@ -4,9 +4,9 @@ use ffmpeg_next::{self as ffmpeg, Rational};
 
 use super::video_encoder::ONE_MILLIS;
 
-// Need to twek these
+// Need to tweak these
 const MIN_AUDIO_VOLUME: f32 = 0.1;
-const MAX_AUDIO_VOLUME: f32 = 0.8;
+const MAX_AUDIO_VOLUME: f32 = 1.0;
 
 #[derive(Clone, Debug)]
 pub struct AudioFrameData {
@@ -151,7 +151,7 @@ pub fn create_opus_encoder() -> Result<ffmpeg::codec::encoder::Audio, ffmpeg::Er
         .audio()?;
 
     encoder_ctx.set_rate(48000);
-    encoder_ctx.set_bit_rate(128_000);
+    encoder_ctx.set_bit_rate(70_000);
     encoder_ctx.set_format(ffmpeg::format::Sample::F32(
         ffmpeg_next::format::sample::Type::Packed,
     ));

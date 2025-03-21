@@ -18,9 +18,43 @@ Use `busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip S
 - [ ] Automatic game detection.
 - [ ] Front end GUI for customizing settings.
 
-### Known bugs I plan to fix
-1. Video seems to sometimes be jittery likely due to variable frame rate and how PTS is set up.
-2. Audio syncing logic could use some work, it's pretty rudimentary right now, unsure how it behaves in long sessions yet.
-3. Game detection by using something like [procfs](https://crates.io/crates/procfs) and a known list of games.
-4. This should be a background daemon that should auto start with systemd.
-5. Front end GUI for modifying some settings like what [X] is.
+### Known bugs/things I plan to implement
+1. Game detection by using something like [procfs](https://crates.io/crates/procfs) and a known list of games.
+2. This should be a background daemon that should auto start with systemd.
+3. Front end GUI for modifying some settings like what [X] is.
+
+### Notes
+This application currently supports GPU encoding via `h264_nvenc` and audio encoding via `opus` utilizing
+ffmpeg.
+
+### Minimum Requirement
+- NVIDIA GPU with CUDA capabilities. (Plan on adding AMD support in the future)
+- Wayland as your communication server for your desktop environment. (X11 planned but not priority)
+- Rust/Cargo installation [link](https://www.rust-lang.org/tools/install) to build the project.
+
+## Installation Guide
+Clone this repository via
+```
+git clone https://github.com/Adonca2203/screen-recorder.git
+```
+Build the project (debug build) via
+```
+cd screen-recorder
+cargo build
+```
+
+## Usage Guide
+You can run the application as a debug build via
+```
+cargo run
+```
+from within your cloned project's directory.
+
+The program will prompt you to select the screen you would like to share with the application, select the appropriate display option/
+
+Play games and have fun
+
+Whenever you want to clip the last 5 minutes of gameplay, open up another terminal and run
+```
+busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveClip
+```

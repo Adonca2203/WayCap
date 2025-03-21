@@ -15,46 +15,55 @@ pub struct VideoFrameData {
 pub struct VideoEncoder {
     encoder: ffmpeg::codec::encoder::Video,
     video_buffer: FrameBuffer,
-    max_time: usize,
 }
 
 #[derive(Clone)]
 pub struct FrameBuffer {
     /// Maps Frames by DTS -> Frame Information so it is ordered properly at muxing time
     pub frames: BTreeMap<i64, VideoFrameData>,
+    max_time: usize,
 }
 
 impl FrameBuffer {
-    fn new() -> Self {
+    fn new(max_time: usize) -> Self {
         Self {
             frames: BTreeMap::new(),
+            max_time,
         }
     }
 
     fn insert(&mut self, timestamp: i64, frame: VideoFrameData) {
         self.frames.insert(timestamp, frame);
+
+        // Keep the buffer to max
+        while let Some(oldest) = self.oldest_pts() {
+            if let Some(newest) = self.newest_pts() {
+                if newest - oldest >= self.max_time as i64 {
+                    self.trim_oldest_gop();
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     pub fn newest_pts(&self) -> Option<i64> {
-        self.frames.values()
-            .map(|frame| frame.pts)
-            .max()
+        self.frames.values().map(|frame| frame.pts).max()
     }
 
     pub fn oldest_pts(&self) -> Option<i64> {
-        self.frames.values()
-            .map(|frame| frame.pts)
-            .min()
+        self.frames.values().map(|frame| frame.pts).min()
     }
 
     pub fn get_last_gop_start(&self) -> i64 {
         for (dts, frame) in self.frames.iter().rev() {
             if frame.is_key {
-                return *dts
+                return *dts;
             }
         }
         -1
     }
+
     fn trim_oldest_gop(&mut self) {
         let mut first_key_frame = true;
         for _ in 0..self.frames.len() {
@@ -93,11 +102,11 @@ impl VideoEncoder {
         ffmpeg::init()?;
 
         let encoder = create_encoder(width, height, encoder_name)?;
+        let max_time = max_buffer_seconds as usize * ONE_MILLIS;
 
         Ok(Self {
             encoder,
-            video_buffer: FrameBuffer::new(),
-            max_time: (max_buffer_seconds as usize * ONE_MILLIS),
+            video_buffer: FrameBuffer::new(max_time),
         })
     }
 
@@ -121,17 +130,6 @@ impl VideoEncoder {
 
                 self.video_buffer
                     .insert(packet.dts().unwrap_or(0), frame_data);
-
-                // Keep the buffer to max
-                while let Some(oldest) = self.video_buffer.oldest_pts() {
-                    if let Some(newest) = self.video_buffer.newest_pts() {
-                        if newest - oldest >= self.max_time as i64 {
-                            self.video_buffer.trim_oldest_gop();
-                        } else {
-                            break;
-                        }
-                    }
-                }
             };
         }
 
@@ -148,21 +146,10 @@ impl VideoEncoder {
 
                 self.video_buffer
                     .insert(packet.dts().unwrap_or(0), frame_data);
-
-                // Keep the buffer to max
-                while let Some(oldest) = self.video_buffer.oldest_pts() {
-                    if let Some(newest) = self.video_buffer.newest_pts() {
-                        if newest - oldest >= self.max_time as i64 {
-                            self.video_buffer.trim_oldest_gop();
-                        } else {
-                            break;
-                        }
-                    }
-                }
             };
             packet = ffmpeg::codec::packet::Packet::empty();
         }
-        
+
         Ok(())
     }
 
@@ -187,8 +174,6 @@ fn create_encoder(
         .encoder()
         .video()?;
 
-    // The quality still doesn't look amazing not sure if encoding issue
-    // or something I need to do on pipewire end?
     encoder_ctx.set_width(width);
     encoder_ctx.set_height(height);
     encoder_ctx.set_format(ffmpeg::format::Pixel::BGRA);

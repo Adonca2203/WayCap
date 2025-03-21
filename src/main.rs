@@ -128,21 +128,19 @@ fn save_buffer(
     // Write video
     let first_pts_offset = video_buffer.oldest_pts().unwrap_or(0);
     let last_i_frame = video_buffer.get_last_gop_start();
-    let mut dts_num = 0;
-    for (_, frame_data) in video_buffer.frames.range(..last_i_frame) {
+    for (dts, frame_data) in video_buffer.frames.range(..last_i_frame) {
         let pts_offset = frame_data.pts - first_pts_offset;
+        let dts_offset = dts - first_pts_offset;
 
         let mut packet = ffmpeg::codec::packet::Packet::copy(&frame_data.frame_bytes);
         packet.set_pts(Some(pts_offset));
-        packet.set_dts(Some(dts_num));
+        packet.set_dts(Some(dts_offset));
 
         packet.set_stream(VIDEO_STREAM);
 
         packet
             .write_interleaved(&mut output)
             .expect("Could not write video interleaved");
-
-        dts_num += 1;
     }
 
     // Write audio
