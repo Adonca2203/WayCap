@@ -1,95 +1,13 @@
-use std::collections::BTreeMap;
-
 use ffmpeg_next::{self as ffmpeg, Rational};
+
+use super::buffer::{FrameBuffer, VideoFrameData};
 
 pub const ONE_MILLIS: usize = 1_000_000;
 const GOP_SIZE: u32 = 30;
 
-#[derive(Clone, Debug)]
-pub struct VideoFrameData {
-    pub frame_bytes: Vec<u8>,
-    pub pts: i64,
-    is_key: bool,
-}
-
 pub struct VideoEncoder {
     encoder: ffmpeg::codec::encoder::Video,
     video_buffer: FrameBuffer,
-}
-
-#[derive(Clone)]
-pub struct FrameBuffer {
-    /// Maps Frames by DTS -> Frame Information so it is ordered properly at muxing time
-    pub frames: BTreeMap<i64, VideoFrameData>,
-    max_time: usize,
-}
-
-impl FrameBuffer {
-    fn new(max_time: usize) -> Self {
-        Self {
-            frames: BTreeMap::new(),
-            max_time,
-        }
-    }
-
-    fn insert(&mut self, timestamp: i64, frame: VideoFrameData) {
-        self.frames.insert(timestamp, frame);
-
-        // Keep the buffer to max
-        while let Some(oldest) = self.oldest_pts() {
-            if let Some(newest) = self.newest_pts() {
-                if newest - oldest >= self.max_time as i64 {
-                    self.trim_oldest_gop();
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    pub fn newest_pts(&self) -> Option<i64> {
-        self.frames.values().map(|frame| frame.pts).max()
-    }
-
-    pub fn oldest_pts(&self) -> Option<i64> {
-        self.frames.values().map(|frame| frame.pts).min()
-    }
-
-    pub fn get_last_gop_start(&self) -> i64 {
-        for (dts, frame) in self.frames.iter().rev() {
-            if frame.is_key {
-                return *dts;
-            }
-        }
-        -1
-    }
-
-    fn trim_oldest_gop(&mut self) {
-        let mut first_key_frame = true;
-        for _ in 0..self.frames.len() {
-            if let Some((&oldest, frame)) = self.frames.iter().next() {
-                if frame.is_key && !first_key_frame {
-                    break;
-                } else {
-                    first_key_frame = false;
-                }
-
-                self.frames.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-    }
-}
-
-impl VideoFrameData {
-    fn new(frame_bytes: Vec<u8>, is_key: bool, dts: i64) -> Self {
-        Self {
-            frame_bytes,
-            is_key,
-            pts: dts,
-        }
-    }
 }
 
 impl VideoEncoder {

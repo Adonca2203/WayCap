@@ -4,10 +4,11 @@ mod pipewire_capture;
 
 use std::{collections::VecDeque, sync::Arc};
 
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use encoders::{
     audio_encoder::{AudioEncoder, AudioFrameData},
-    video_encoder::{FrameBuffer, VideoEncoder},
+    buffer::FrameBuffer,
+    video_encoder::VideoEncoder,
 };
 use ffmpeg_next::{self as ffmpeg};
 use log::{debug, LevelFilter};
@@ -104,35 +105,40 @@ fn save_buffer(
     video_encoder: &ffmpeg::codec::encoder::Video,
     audio_buffer: VecDeque<AudioFrameData>,
     audio_encoder: &ffmpeg::codec::encoder::Audio,
-) -> Result<(), ffmpeg::Error> {
+) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
 
-    let video_codec = video_encoder.codec().unwrap();
+    let video_codec = video_encoder
+        .codec()
+        .context("Could not find expected video codec")?;
+
     let mut video_stream = output.add_stream(video_codec)?;
     video_stream.set_time_base(video_encoder.time_base());
     video_stream.set_parameters(&video_encoder);
 
-    let audio_codec = audio_encoder.codec().unwrap();
+    let audio_codec = audio_encoder
+        .codec()
+        .context("Could not find expected audio codec")?;
+
     let mut audio_stream = output.add_stream(audio_codec)?;
     audio_stream.set_time_base(audio_encoder.time_base());
     audio_stream.set_parameters(&audio_encoder);
 
-    if let Err(err) = output.write_header() {
-        debug!(
-            "Ran into the following error while writing header: {:?}",
-            err
-        );
-        return Err(err);
-    }
+    output.write_header()?;
 
     // Write video
-    let first_pts_offset = video_buffer.oldest_pts().unwrap_or(0);
-    let last_i_frame = video_buffer.get_last_gop_start();
-    for (dts, frame_data) in video_buffer.frames.range(..last_i_frame) {
-        let pts_offset = frame_data.pts - first_pts_offset;
-        let dts_offset = dts - first_pts_offset;
+    let first_pts_offset = video_buffer
+        .oldest_pts()
+        .context("Could not get oldest pts when muxing.")?;
+    for (dts, frame_data) in video_buffer.get_full_gops()? {
+        let pts_offset = frame_data.get_pts() - first_pts_offset;
+        let mut dts_offset = dts - first_pts_offset;
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame_data.frame_bytes);
+        if dts_offset < 0 {
+            dts_offset = 0;
+        }
+
+        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame_data.get_raw_bytes());
         packet.set_pts(Some(pts_offset));
         packet.set_dts(Some(dts_offset));
 
