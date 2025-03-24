@@ -1,3 +1,4 @@
+mod application_config;
 mod dbus;
 mod encoders;
 mod pipewire_capture;
@@ -5,6 +6,7 @@ mod pipewire_capture;
 use std::{collections::VecDeque, sync::Arc};
 
 use anyhow::{Context, Error, Result};
+use application_config::load_or_create_config;
 use encoders::{
     audio_encoder::{AudioEncoder, AudioFrameData},
     buffer::FrameBuffer,
@@ -17,16 +19,13 @@ use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
 
-// Most if not all of these should be customizeable via a conf file
-const NVENC: &str = "h264_nvenc";
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
-const MAX_SECONDS: usize = 300;
-const USE_MIC: bool = false;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
+    let config = load_or_create_config();
 
     let mut screen_cast = ScreenCast::new()?;
     screen_cast.set_source_types(SourceType::MONITOR);
@@ -54,15 +53,16 @@ async fn main() -> Result<(), Error> {
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
         height,
-        MAX_SECONDS as u32,
-        NVENC,
+        config.max_seconds,
+        &config.encoder,
     )?));
-    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(MAX_SECONDS as u32)?));
+    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(config.max_seconds)?));
 
     std::thread::spawn(move || {
         debug!("Creating pipewire stream");
         let _capture =
-            PipewireCapture::new(fd, stream_node, video_sender, audio_sender, USE_MIC).unwrap();
+            PipewireCapture::new(fd, stream_node, video_sender, audio_sender, config.use_mic)
+                .unwrap();
     });
 
     // Main event loop

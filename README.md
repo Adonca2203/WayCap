@@ -15,17 +15,20 @@ Use `busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip S
 - [x] Captures audio using pipewire.
 - [x] On dbus command, saves what it has captures to a .mp4 file.
 - [x] Uses GPU to encode frames to reduce CPU overhead. (Currently only supports nvidia) 
+- [x] Customize certain options via an user level config file in ~/.config
 - [ ] Automatic game detection.
 - [ ] Front end GUI for customizing settings.
 
 ### Known bugs/things I plan to implement
 1. Game detection by using something like [procfs](https://crates.io/crates/procfs) and a known list of games.
 2. This should be a background daemon that should auto start with systemd.
-3. Front end GUI for modifying some settings like what [X] is.
 
 ### Notes
 This application currently supports GPU encoding via `h264_nvenc` and audio encoding via `opus` utilizing
 ffmpeg.
+
+Other video encoders may work but am unable to test on anything that is not NVIDIA. Feel free to change the encoder in
+the config file under ~/.config/auto-screen-recorder
 
 ### Minimum Requirement
 - NVIDIA GPU with CUDA capabilities. (Plan on adding AMD support in the future)
@@ -54,7 +57,9 @@ The program will prompt you to select the screen you would like to share with th
 
 Play games and have fun
 
-Whenever you want to clip the last 5 minutes of gameplay, open up another terminal and run
+Whenever you want to clip, open up another terminal and run
 ```
 busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveClip
 ```
+
+Alternatively, bind the above busctl call to a keybind with something like [sxhkd](https://github.com/baskerville/sxhkd)
