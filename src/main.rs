@@ -75,7 +75,11 @@ async fn main() -> Result<(), Error> {
                     audio_encoder.lock()
                 );
 
+                // Not sure if drain should send EOF, destroy then recreate the encoder or we leave
+                // this as it
                 video_lock.drain()?;
+                //TODO: audio darin
+                //audio_lock.drain()?;
                 let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
                 let video_buffer = video_lock.get_buffer();
                 let video_encoder = video_lock.get_encoder();
@@ -86,8 +90,6 @@ async fn main() -> Result<(), Error> {
                 save_buffer(&filename, video_buffer, video_encoder, &mut audio_buffer, audio_encoder)?;
 
                 debug!("Done saving!");
-                drop(video_lock);
-                drop(audio_lock);
             },
             Some((frame, time)) = video_receiver.recv() => {
                 video_encoder.lock().await.process(&frame, time)?;
@@ -128,7 +130,7 @@ fn save_buffer(
 
     let video_buffer_gops = video_buffer.get_full_gops()?;
     // Align audio buffer timestamp to video buffer
-    // 
+    //
     // This is probably no longer needed now that Audio and Video wait for both
     // to be in streaming state before beginning to process
     // so they should be in sync by this point

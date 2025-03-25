@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, Rational};
 
 use super::video_encoder::ONE_MILLIS;
@@ -8,6 +9,8 @@ use super::video_encoder::ONE_MILLIS;
 const MIN_AUDIO_VOLUME: f32 = 0.1;
 const MAX_AUDIO_VOLUME: f32 = 1.0;
 
+// TODO: Make this work closer to video encoder where we use the PTS
+// given to us by the encoder instead of capture time
 #[derive(Clone, Debug)]
 pub struct AudioFrameData {
     pub frame_bytes: Vec<u8>,
@@ -115,6 +118,8 @@ impl AudioEncoder {
         Ok(())
     }
 
+    // This function needs a lot more work, audio sometimes can sound wavy if there is some noise
+    // involved in it
     fn normalize_audio_volume(&mut self, samples: &mut [f32], min_volume: f32, max_volume: f32) {
         let peak = samples
             .iter()
@@ -139,6 +144,12 @@ impl AudioEncoder {
 
     pub fn get_buffer(&self) -> VecDeque<AudioFrameData> {
         self.audio_buffer.clone()
+    }
+
+    pub fn drain(&self) -> Result<(), ffmpeg::Error> {
+        let mut packet = ffmpeg::codec::packet::Packet::empty();
+
+        Ok(())
     }
 }
 
