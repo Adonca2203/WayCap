@@ -1,5 +1,7 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
 
+use crate::application_config::{load_or_create_config, QualityPreset};
+
 use super::buffer::{FrameBuffer, VideoFrameData};
 
 pub const ONE_MILLIS: usize = 1_000_000;
@@ -17,6 +19,7 @@ impl VideoEncoder {
         max_buffer_seconds: u32,
         encoder_name: &str,
     ) -> Result<Self, ffmpeg::Error> {
+        ffmpeg::log::set_level(ffmpeg_next::log::Level::Debug);
         ffmpeg::init()?;
 
         let encoder = create_encoder(width, height, encoder_name)?;
@@ -85,6 +88,7 @@ fn create_encoder(
     height: u32,
     encoder_name: &str,
 ) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
+    let config = load_or_create_config();
     let encoder_codec =
         ffmpeg::codec::encoder::find_by_name(encoder_name).ok_or(ffmpeg::Error::EncoderNotFound)?;
 
@@ -98,8 +102,6 @@ fn create_encoder(
     encoder_ctx.set_frame_rate(Some(Rational::new(1, 60)));
 
     // These should be part of a config file
-    encoder_ctx.set_bit_rate(12_000_000);
-    encoder_ctx.set_max_bit_rate(16_000_000);
     encoder_ctx.set_time_base(Rational::new(1, 1_000_000));
 
     // Needed to insert I-Frames more frequently so we don't lose full seconds
@@ -108,7 +110,29 @@ fn create_encoder(
 
     let encoder_params = ffmpeg::codec::Parameters::new();
     let mut opts = ffmpeg::Dictionary::new();
-    opts.set("vsync", "vfr");
+    match config.quality {
+        QualityPreset::LOW => {
+            opts.set("vsync", "vfr");
+            opts.set("rc", "vbr");
+            opts.set("preset", "p2");
+            opts.set("tune", "hq");
+            opts.set("cq", "45");
+        }
+        QualityPreset::MEDIUM => {
+            opts.set("vsync", "vfr");
+            opts.set("rc", "vbr");
+            opts.set("preset", "p4");
+            opts.set("tune", "hq");
+            opts.set("cq", "25");
+        }
+        QualityPreset::HIGH => {
+            opts.set("vsync", "vfr");
+            opts.set("rc", "vbr");
+            opts.set("preset", "p7");
+            opts.set("tune", "hq");
+            opts.set("cq", "1");
+        }
+    }
 
     encoder_ctx.set_parameters(encoder_params)?;
     let encoder = encoder_ctx.open_with(opts)?;

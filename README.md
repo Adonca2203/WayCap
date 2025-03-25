@@ -22,6 +22,7 @@ Use `busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip S
 ### Known bugs/things I plan to implement
 1. Game detection by using something like [procfs](https://crates.io/crates/procfs) and a known list of games.
 2. This should be a background daemon that should auto start with systemd.
+3. Audio can go out of sync with the video and end up further ahead.
 
 ### Notes
 This application currently supports GPU encoding via `h264_nvenc` and audio encoding via `opus` utilizing

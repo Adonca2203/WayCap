@@ -80,10 +80,10 @@ async fn main() -> Result<(), Error> {
                 let video_buffer = video_lock.get_buffer();
                 let video_encoder = video_lock.get_encoder();
 
-                let audio_buffer = audio_lock.get_buffer();
+                let mut audio_buffer = audio_lock.get_buffer();
                 let audio_encoder = audio_lock.get_encoder();
 
-                save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
+                save_buffer(&filename, video_buffer, video_encoder, &mut audio_buffer, audio_encoder)?;
 
                 debug!("Done saving!");
                 drop(video_lock);
@@ -103,7 +103,7 @@ fn save_buffer(
     filename: &str,
     video_buffer: FrameBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
-    audio_buffer: VecDeque<AudioFrameData>,
+    audio_buffer: &mut VecDeque<AudioFrameData>,
     audio_encoder: &ffmpeg::codec::encoder::Audio,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
@@ -125,6 +125,22 @@ fn save_buffer(
     audio_stream.set_parameters(&audio_encoder);
 
     output.write_header()?;
+
+    let video_buffer_gops = video_buffer.get_full_gops()?;
+    // Align audio buffer timestamp to video buffer
+    // 
+    // This is probably no longer needed now that Audio and Video wait for both
+    // to be in streaming state before beginning to process
+    // so they should be in sync by this point
+    while let Some(audio_frame) = audio_buffer.front() {
+        if let Some((_, video_frame)) = video_buffer_gops.iter().next_back().take() {
+            if audio_frame.capture_time < video_frame.get_pts() {
+                audio_buffer.pop_front();
+                continue;
+            }
+        }
+        break;
+    }
 
     // Write video
     let first_pts_offset = video_buffer

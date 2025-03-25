@@ -6,11 +6,20 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all="UPPERCASE")]
+pub enum QualityPreset {
+    LOW,
+    MEDIUM,
+    HIGH
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
     pub encoder: String,
     pub max_seconds: u32,
     pub use_mic: bool,
+    pub quality: QualityPreset,
 }
 
 impl Default for AppConfig {
@@ -19,6 +28,7 @@ impl Default for AppConfig {
             encoder: "h264_nvenc".to_string(),
             max_seconds: 300,
             use_mic: false,
+            quality: QualityPreset::MEDIUM
         }
     }
 }
