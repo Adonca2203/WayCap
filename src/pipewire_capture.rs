@@ -61,7 +61,7 @@ impl PipewireCapture {
         pipewire_fd: RawFd,
         stream_node: u32,
         process_video_callback: mpsc::Sender<(Vec<u8>, i64)>,
-        process_audio_callback: mpsc::Sender<(Vec<f32>, i64)>,
+        process_audio_callback: mpsc::Sender<Vec<f32>>,
         use_mic: bool,
     ) -> Result<Self, pipewire::Error> {
         pw::init();
@@ -131,9 +131,11 @@ impl PipewireCapture {
                         // send frame data to encoder
                         let data = &mut datas[0];
                         if let Some(frame) = data.data() {
-                            process_video_callback
-                                .blocking_send((frame.to_vec(), time_ms))
-                                .unwrap();
+                            if let Err(err) =
+                                process_video_callback.blocking_send((frame.to_vec(), time_ms))
+                            {
+                                error!("Error sending video frame: {:?}", err);
+                            }
                         }
                     }
                 }
@@ -292,12 +294,6 @@ impl PipewireCapture {
                         return;
                     }
 
-                    let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
-                        elapsed.as_micros() as i64
-                    } else {
-                        0
-                    };
-
                     let data = &mut datas[0];
                     let n_samples = data.chunk().size() / (std::mem::size_of::<f32>()) as u32;
 
@@ -305,7 +301,7 @@ impl PipewireCapture {
                         let samples_f32: &[f32] = bytemuck::cast_slice(samples);
                         let audio_samples = &samples_f32[..n_samples as usize];
                         process_audio_callback
-                            .blocking_send((audio_samples.to_vec(), time_ms))
+                            .blocking_send(audio_samples.to_vec())
                             .unwrap();
                     }
                 }

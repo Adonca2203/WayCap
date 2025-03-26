@@ -2,14 +2,14 @@ use ffmpeg_next::{self as ffmpeg, Rational};
 
 use crate::application_config::{load_or_create_config, QualityPreset};
 
-use super::buffer::{FrameBuffer, VideoFrameData};
+use super::buffer::{VideoBuffer, VideoFrameData};
 
 pub const ONE_MILLIS: usize = 1_000_000;
 const GOP_SIZE: u32 = 30;
 
 pub struct VideoEncoder {
     encoder: ffmpeg::codec::encoder::Video,
-    video_buffer: FrameBuffer,
+    video_buffer: VideoBuffer,
 }
 
 impl VideoEncoder {
@@ -27,7 +27,7 @@ impl VideoEncoder {
 
         Ok(Self {
             encoder,
-            video_buffer: FrameBuffer::new(max_time),
+            video_buffer: VideoBuffer::new(max_time),
         })
     }
 
@@ -78,7 +78,7 @@ impl VideoEncoder {
         &self.encoder
     }
 
-    pub fn get_buffer(&self) -> FrameBuffer {
+    pub fn get_buffer(&self) -> VideoBuffer {
         self.video_buffer.clone()
     }
 }

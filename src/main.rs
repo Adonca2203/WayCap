@@ -3,13 +3,13 @@ mod dbus;
 mod encoders;
 mod pipewire_capture;
 
-use std::{collections::VecDeque, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
 use encoders::{
-    audio_encoder::{AudioEncoder, AudioFrameData},
-    buffer::FrameBuffer,
+    audio_encoder::AudioEncoder,
+    buffer::{AudioBuffer, VideoBuffer},
     video_encoder::VideoEncoder,
 };
 use ffmpeg_next::{self as ffmpeg};
@@ -48,7 +48,7 @@ async fn main() -> Result<(), Error> {
         .await?;
 
     let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(10);
-    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(10);
+    let (audio_sender, mut audio_receiver) = mpsc::channel::<Vec<f32>>(10);
 
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
@@ -69,33 +69,32 @@ async fn main() -> Result<(), Error> {
     loop {
         tokio::select! {
             _ = save_rx.recv() => {
-                // Stop capturing video and audio by taking out the lock
-                let (mut video_lock, audio_lock) = tokio::join!(
+                // Stop capturing video and audio while we save by taking out the locks
+                let (mut video_lock, mut audio_lock) = tokio::join!(
                     video_encoder.lock(),
                     audio_encoder.lock()
                 );
 
-                // Not sure if drain should send EOF, destroy then recreate the encoder or we leave
-                // this as it
+                // Drain both encoders of any remaining frames being processed
                 video_lock.drain()?;
-                //TODO: audio darin
-                //audio_lock.drain()?;
+                audio_lock.drain()?;
+
                 let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
                 let video_buffer = video_lock.get_buffer();
                 let video_encoder = video_lock.get_encoder();
 
-                let mut audio_buffer = audio_lock.get_buffer();
+                let audio_buffer = audio_lock.get_buffer();
                 let audio_encoder = audio_lock.get_encoder();
 
-                save_buffer(&filename, video_buffer, video_encoder, &mut audio_buffer, audio_encoder)?;
+                save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
 
                 debug!("Done saving!");
             },
             Some((frame, time)) = video_receiver.recv() => {
                 video_encoder.lock().await.process(&frame, time)?;
             },
-            Some((samples, time)) = audio_receiver.recv() => {
-                audio_encoder.lock().await.process(&samples, time)?;
+            Some(samples) = audio_receiver.recv() => {
+                audio_encoder.lock().await.process(&samples)?;
             }
         }
     }
@@ -103,9 +102,9 @@ async fn main() -> Result<(), Error> {
 
 fn save_buffer(
     filename: &str,
-    video_buffer: FrameBuffer,
+    video_buffer: VideoBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
-    audio_buffer: &mut VecDeque<AudioFrameData>,
+    audio_buffer: AudioBuffer,
     audio_encoder: &ffmpeg::codec::encoder::Audio,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
@@ -129,26 +128,18 @@ fn save_buffer(
     output.write_header()?;
 
     let video_buffer_gops = video_buffer.get_full_gops()?;
-    // Align audio buffer timestamp to video buffer
-    //
-    // This is probably no longer needed now that Audio and Video wait for both
-    // to be in streaming state before beginning to process
-    // so they should be in sync by this point
-    while let Some(audio_frame) = audio_buffer.front() {
-        if let Some((_, video_frame)) = video_buffer_gops.iter().next_back().take() {
-            if audio_frame.capture_time < video_frame.get_pts() {
-                audio_buffer.pop_front();
-                continue;
-            }
-        }
-        break;
-    }
+    let newest_video_pts = video_buffer_gops
+        .values()
+        .map(|frame| frame.get_pts())
+        .max()
+        .context("Count not get newest pts in full GOPs")?
+        .clone();
 
     // Write video
     let first_pts_offset = video_buffer
         .oldest_pts()
         .context("Could not get oldest pts when muxing.")?;
-    for (dts, frame_data) in video_buffer.get_full_gops()? {
+    for (dts, frame_data) in video_buffer_gops {
         let pts_offset = frame_data.get_pts() - first_pts_offset;
         let mut dts_offset = dts - first_pts_offset;
 
@@ -166,13 +157,20 @@ fn save_buffer(
             .write_interleaved(&mut output)
             .expect("Could not write video interleaved");
     }
-
     // Write audio
-    let first_frame_offset = audio_buffer.front().unwrap().chunk_time;
-    for frame in audio_buffer {
-        let offset = frame.chunk_time - first_frame_offset;
+    let oldest_frame_offset = audio_buffer
+        .oldest_chunk()
+        .context("Could not get oldest chunk")?;
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.frame_bytes);
+    for (pts_in_micros, frame) in audio_buffer.get_frames() {
+        // Don't write any more audio if we would exceed video (clip to max video)
+        if pts_in_micros > newest_video_pts {
+            break;
+        }
+
+        let offset = frame.get_pts() - oldest_frame_offset;
+
+        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.get_data());
         packet.set_pts(Some(offset));
         packet.set_dts(Some(offset));
 
