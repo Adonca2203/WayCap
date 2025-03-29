@@ -64,3 +64,12 @@ busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveCl
 ```
 
 Alternatively, bind the above busctl call to a keybind with something like [sxhkd](https://github.com/baskerville/sxhkd)
+
+Find the moment in the clip you want and trim the video using the helper script
+```
+FILE_NAME=
+START_TIME=
+END_TIME=
+
+./clip.sh -i $FILE_NAME -s $START_TIME -e $END_TIME -o output.mp4
+```
