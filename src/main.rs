@@ -88,6 +88,10 @@ async fn main() -> Result<(), Error> {
 
                 save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
 
+                // Reset video and audio buffers
+                audio_lock.reset();
+                video_lock.reset();
+
                 debug!("Done saving!");
             },
             Some((frame, time)) = video_receiver.recv() => {

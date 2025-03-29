@@ -58,7 +58,6 @@ impl VideoEncoder {
     }
 
     /// Drain the encoder of any remaining frames it is processing
-    /// And reset the video buffer
     pub fn drain(&mut self) -> Result<(), ffmpeg::Error> {
         let mut packet = ffmpeg::codec::packet::Packet::empty();
         while self.encoder.receive_packet(&mut packet).is_ok() {
@@ -71,11 +70,12 @@ impl VideoEncoder {
             };
             packet = ffmpeg::codec::packet::Packet::empty();
         }
-
-        self.video_buffer.clear();
         Ok(())
     }
 
+    pub fn reset(&mut self) {
+        self.video_buffer.clear();
+    }
     pub fn get_encoder(&self) -> &ffmpeg::codec::encoder::Video {
         &self.encoder
     }
@@ -115,24 +115,24 @@ fn create_encoder(
     match config.quality {
         QualityPreset::LOW => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "vbr");
+            opts.set("rc", "cbr");
             opts.set("preset", "p2");
             opts.set("tune", "hq");
-            opts.set("cq", "45");
+            opts.set("cq", "35");
         }
         QualityPreset::MEDIUM => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "vbr");
+            opts.set("rc", "cbr");
             opts.set("preset", "p4");
             opts.set("tune", "hq");
             opts.set("cq", "25");
         }
         QualityPreset::HIGH => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "vbr");
+            opts.set("rc", "cbr");
             opts.set("preset", "p7");
             opts.set("tune", "hq");
-            opts.set("cq", "1");
+            opts.set("cq", "15");
         }
     }
 
