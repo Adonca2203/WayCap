@@ -112,6 +112,9 @@ fn create_encoder(
 
     let encoder_params = ffmpeg::codec::Parameters::new();
     let mut opts = ffmpeg::Dictionary::new();
+
+    // TODO: Fine tune these presets and show estimated file sizes for each in the
+    // README
     match config.quality {
         QualityPreset::LOW => {
             opts.set("vsync", "vfr");
@@ -133,6 +136,15 @@ fn create_encoder(
             opts.set("preset", "p7");
             opts.set("tune", "hq");
             opts.set("cq", "15");
+        },
+        // This one produced a 9.5 GB file for a 5 minute recording
+        // @ 2560x1440 resoltion.
+        QualityPreset::HIGHEST => {
+            opts.set("vsync", "vfr");
+            opts.set("rc", "cbr");
+            opts.set("preset", "p7");
+            opts.set("tune", "hq");
+            opts.set("cq", "1");
         }
     }
 

@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 pub enum QualityPreset {
     LOW,
     MEDIUM,
-    HIGH
+    HIGH,
+    HIGHEST
 }
 
 #[derive(Debug, Deserialize, Serialize)]
