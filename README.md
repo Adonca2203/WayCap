@@ -32,7 +32,7 @@ Other video encoders may work but am unable to test on anything that is not NVID
 the config file under ~/.config/auto-screen-recorder
 
 ### Minimum Requirement
-- NVIDIA GPU with CUDA capabilities. (Plan on adding AMD support in the future)
+- NVIDIA GPU with CUDA capabilities recommended
 - Wayland as your communication server for your desktop environment. (X11 planned but not priority)
 - Rust/Cargo installation [link](https://www.rust-lang.org/tools/install) to build the project.
 
