@@ -12,7 +12,7 @@ use encoders::{
     buffer::{AudioBuffer, VideoBuffer},
     video_encoder::VideoEncoder,
 };
-use ffmpeg_next::{self as ffmpeg};
+use ffmpeg_next::{self as ffmpeg, format::output};
 use log::{debug, LevelFilter};
 use pipewire_capture::PipewireCapture;
 use portal_screencast::{CursorMode, ScreenCast, SourceType};

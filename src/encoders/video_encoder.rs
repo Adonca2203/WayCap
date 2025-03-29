@@ -58,6 +58,7 @@ impl VideoEncoder {
     }
 
     /// Drain the encoder of any remaining frames it is processing
+    /// And reset the video buffer
     pub fn drain(&mut self) -> Result<(), ffmpeg::Error> {
         let mut packet = ffmpeg::codec::packet::Packet::empty();
         while self.encoder.receive_packet(&mut packet).is_ok() {
@@ -71,6 +72,7 @@ impl VideoEncoder {
             packet = ffmpeg::codec::packet::Packet::empty();
         }
 
+        self.video_buffer.clear();
         Ok(())
     }
 

@@ -120,15 +120,15 @@ impl VideoBuffer {
             return;
         }
 
-        let stop_pts = self.key_frame_keys[1]; // First complete GOP ends at second key frame
+        let stop_dts = self.key_frame_keys[1]; // First complete GOP ends at second key frame
 
-        let mut pts_to_remove = Vec::new();
-        for (&pts, _) in self.frames.range(..stop_pts) {
-            pts_to_remove.push(pts);
+        let mut dts_to_remove = Vec::new();
+        for (&pts, _) in self.frames.range(..stop_dts) {
+            dts_to_remove.push(pts);
         }
 
-        for pts in pts_to_remove {
-            self.frames.remove(&pts);
+        for dts in dts_to_remove {
+            self.frames.remove(&dts);
         }
 
         // Remove deleted key frame
@@ -149,6 +149,11 @@ impl VideoBuffer {
         };
 
         return Err(anyhow!("Could not get last GOP start"));
+    }
+
+    pub fn clear(&mut self) {
+        self.frames.clear();
+        self.key_frame_keys.clear();
     }
 }
 
@@ -237,5 +242,9 @@ impl AudioBuffer {
 
     pub fn get_frames(&self) -> BTreeMap<i64, AudioFrameData> {
         self.frames.clone()
+    }
+
+    pub fn clear(&mut self) {
+        self.frames.clear();
     }
 }

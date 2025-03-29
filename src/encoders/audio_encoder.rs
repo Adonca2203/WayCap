@@ -130,7 +130,8 @@ impl AudioEncoder {
         self.audio_buffer.clone()
     }
 
-    // Get remaining frames in the encoder
+    // Drain remaining frames being processed in the encoder
+    // and reset the buffer
     pub fn drain(&mut self) -> Result<(), ffmpeg::Error> {
         let mut packet = ffmpeg::codec::packet::Packet::empty();
         while self.encoder.receive_packet(&mut packet).is_ok() {
@@ -140,7 +141,7 @@ impl AudioEncoder {
                 self.audio_buffer.insert(pts, frame_data.clone());
             }
         }
-
+        self.audio_buffer.clear();
         Ok(())
     }
 }
