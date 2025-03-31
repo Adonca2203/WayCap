@@ -1,4 +1,5 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
+use log::debug;
 
 use crate::application_config::{load_or_create_config, QualityPreset};
 
@@ -102,6 +103,7 @@ fn create_encoder(
     encoder_ctx.set_height(height);
     encoder_ctx.set_format(ffmpeg::format::Pixel::BGRA);
     encoder_ctx.set_frame_rate(Some(Rational::new(1, 60)));
+    encoder_ctx.set_bit_rate(16_000_000);
 
     // These should be part of a config file
     encoder_ctx.set_time_base(Rational::new(1, 1_000_000));
@@ -116,35 +118,38 @@ fn create_encoder(
     // TODO: Fine tune these presets and show estimated file sizes for each in the
     // README
     match config.quality {
+        // 1.5 GB file for a 5 minute recording
         QualityPreset::LOW => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "cbr");
+            opts.set("rc", "vbr");
             opts.set("preset", "p2");
             opts.set("tune", "hq");
-            opts.set("cq", "35");
+            opts.set("cq", "25");
+            opts.set("b:v", "20M");
         }
         QualityPreset::MEDIUM => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "cbr");
+            opts.set("rc", "vbr");
             opts.set("preset", "p4");
             opts.set("tune", "hq");
-            opts.set("cq", "25");
+            opts.set("cq", "18");
+            opts.set("b:v", "40M");
         }
         QualityPreset::HIGH => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "cbr");
+            opts.set("rc", "vbr");
             opts.set("preset", "p7");
             opts.set("tune", "hq");
-            opts.set("cq", "15");
-        },
-        // This one produced a 9.5 GB file for a 5 minute recording
-        // @ 2560x1440 resoltion.
+            opts.set("cq", "10");
+            opts.set("b:v", "80M");
+        }
         QualityPreset::HIGHEST => {
             opts.set("vsync", "vfr");
-            opts.set("rc", "cbr");
+            opts.set("rc", "vbr");
             opts.set("preset", "p7");
             opts.set("tune", "hq");
             opts.set("cq", "1");
+            opts.set("b:v", "120M");
         }
     }
 
