@@ -61,7 +61,7 @@ impl PipewireCapture {
         pipewire_fd: RawFd,
         stream_node: u32,
         process_video_callback: mpsc::Sender<(Vec<u8>, i64)>,
-        process_audio_callback: mpsc::Sender<Vec<f32>>,
+        process_audio_callback: mpsc::Sender<(Vec<f32>, i64)>,
         use_mic: bool,
     ) -> Result<Self, pipewire::Error> {
         pw::init();
@@ -284,15 +284,21 @@ impl PipewireCapture {
             .process(move |stream, udata| match stream.dequeue_buffer() {
                 None => debug!("Out of audio buffers"),
                 Some(mut buffer) => {
+                    // Wait until video is streaming before we try to process
+                    if !udata.video_ready.load(std::sync::atomic::Ordering::Acquire) {
+                        return;
+                    }
+
                     let datas = buffer.datas_mut();
                     if datas.is_empty() {
                         return;
                     }
 
-                    // Wait until video is streaming before we try to process
-                    if !udata.video_ready.load(std::sync::atomic::Ordering::Acquire) {
-                        return;
-                    }
+                    let time_ms = if let Ok(elapsed) = udata.start_time.elapsed() {
+                        elapsed.as_micros() as i64
+                    } else {
+                        0
+                    };
 
                     let data = &mut datas[0];
                     let n_samples = data.chunk().size() / (std::mem::size_of::<f32>()) as u32;
@@ -301,7 +307,7 @@ impl PipewireCapture {
                         let samples_f32: &[f32] = bytemuck::cast_slice(samples);
                         let audio_samples = &samples_f32[..n_samples as usize];
                         process_audio_callback
-                            .blocking_send(audio_samples.to_vec())
+                            .blocking_send((audio_samples.to_vec(), time_ms))
                             .unwrap();
                     }
                 }

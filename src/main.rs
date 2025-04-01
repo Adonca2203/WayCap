@@ -48,7 +48,7 @@ async fn main() -> Result<(), Error> {
         .await?;
 
     let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(10);
-    let (audio_sender, mut audio_receiver) = mpsc::channel::<Vec<f32>>(10);
+    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(10);
 
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
@@ -88,17 +88,13 @@ async fn main() -> Result<(), Error> {
 
                 save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
 
-                // Reset video and audio buffers
-                audio_lock.reset();
-                video_lock.reset();
-
                 debug!("Done saving!");
             },
             Some((frame, time)) = video_receiver.recv() => {
                 video_encoder.lock().await.process(&frame, time)?;
             },
-            Some(samples) = audio_receiver.recv() => {
-                audio_encoder.lock().await.process(&samples)?;
+            Some((samples, time)) = audio_receiver.recv() => {
+                audio_encoder.lock().await.process(&samples, time)?;
             }
         }
     }
@@ -106,9 +102,9 @@ async fn main() -> Result<(), Error> {
 
 fn save_buffer(
     filename: &str,
-    video_buffer: VideoBuffer,
+    video_buffer: &VideoBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
-    audio_buffer: AudioBuffer,
+    audio_buffer: &AudioBuffer,
     audio_encoder: &ffmpeg::codec::encoder::Audio,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
@@ -131,22 +127,26 @@ fn save_buffer(
 
     output.write_header()?;
 
-    let video_buffer_gops = video_buffer.get_full_gops()?;
-    let newest_video_pts = video_buffer_gops
-        .values()
-        .map(|frame| frame.get_pts())
-        .max()
-        .context("Count not get newest pts in full GOPs")?
-        .clone();
+    let last_keyframe = video_buffer
+        .get_last_gop_start()
+        .context("Could not get last keyframe dts")?;
+
+    let newest_video_pts = video_buffer
+        .get_frames()
+        .get(last_keyframe)
+        .context("Could not get last keyframe")?
+        .get_pts();
 
     // Write video
     let first_pts_offset = video_buffer
         .oldest_pts()
         .context("Could not get oldest pts when muxing.")?;
-    for (dts, frame_data) in video_buffer_gops {
+    debug!("VIDEO SAVE START");
+    for (dts, frame_data) in video_buffer.get_frames().range(..=last_keyframe) {
         let pts_offset = frame_data.get_pts() - first_pts_offset;
         let mut dts_offset = dts - first_pts_offset;
 
+        debug!("PTS offset: {:?}", pts_offset);
         if dts_offset < 0 {
             dts_offset = 0;
         }
@@ -161,11 +161,14 @@ fn save_buffer(
             .write_interleaved(&mut output)
             .expect("Could not write video interleaved");
     }
+    debug!("VIDEO SAVE END");
+
     // Write audio
     let oldest_frame_offset = audio_buffer
         .oldest_chunk()
         .context("Could not get oldest chunk")?;
 
+    debug!("AUDIO SAVE START");
     for (pts_in_micros, frame) in audio_buffer.get_frames() {
         // Don't write any more audio if we would exceed video (clip to max video)
         if pts_in_micros > newest_video_pts {
@@ -173,6 +176,11 @@ fn save_buffer(
         }
 
         let offset = frame.get_pts() - oldest_frame_offset;
+
+        debug!(
+            "PTS IN MICROS: {:?}, PTS IN TIME SCALE: {:?}",
+            pts_in_micros, offset
+        );
 
         let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.get_data());
         packet.set_pts(Some(offset));
@@ -184,6 +192,7 @@ fn save_buffer(
             .write_interleaved(&mut output)
             .expect("Could not write audio interleaved");
     }
+    debug!("AUDIO SAVE END");
 
     output.write_trailer()?;
 

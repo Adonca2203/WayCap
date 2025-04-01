@@ -78,7 +78,7 @@ impl AudioEncoder {
         Ok(())
     }
 
-    pub fn process(&mut self, audio: &[f32]) -> Result<(), ffmpeg::Error> {
+    pub fn process(&mut self, audio: &[f32], capture_time: i64) -> Result<(), ffmpeg::Error> {
         let n_channels = self.encoder.channels() as usize;
         let total_samples = audio.len();
 
@@ -126,8 +126,8 @@ impl AudioEncoder {
         &self.encoder
     }
 
-    pub fn get_buffer(&self) -> AudioBuffer {
-        self.audio_buffer.clone()
+    pub fn get_buffer(&self) -> &AudioBuffer {
+        &self.audio_buffer
     }
 
     // Drain remaining frames being processed in the encoder
@@ -141,9 +141,5 @@ impl AudioEncoder {
             }
         }
         Ok(())
-    }
-
-    pub fn reset(&mut self) {
-        self.audio_buffer.clear();
     }
 }

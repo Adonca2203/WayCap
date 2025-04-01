@@ -1,5 +1,4 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
-use log::debug;
 
 use crate::application_config::{load_or_create_config, QualityPreset};
 
@@ -74,15 +73,12 @@ impl VideoEncoder {
         Ok(())
     }
 
-    pub fn reset(&mut self) {
-        self.video_buffer.clear();
-    }
     pub fn get_encoder(&self) -> &ffmpeg::codec::encoder::Video {
         &self.encoder
     }
 
-    pub fn get_buffer(&self) -> VideoBuffer {
-        self.video_buffer.clone()
+    pub fn get_buffer(&self) -> &VideoBuffer {
+        &self.video_buffer
     }
 }
 

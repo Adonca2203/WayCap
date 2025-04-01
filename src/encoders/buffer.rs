@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, Result};
 use log::warn;
 
 /// Represents a single encoded video frame
@@ -103,8 +102,8 @@ impl VideoBuffer {
     /// Returns the decoding timestamp (DTS) of the most recent key frame (start of the last GOP).
     ///
     /// Returns `None` if no key frames have been inserted.
-    pub fn get_last_gop_start(&self) -> Option<i64> {
-        self.key_frame_keys.last().copied()
+    pub fn get_last_gop_start(&self) -> Option<&i64> {
+        self.key_frame_keys.last()
     }
 
     /// Removes the oldest group of pictures (GOP) from the buffer.
@@ -135,25 +134,8 @@ impl VideoBuffer {
         self.key_frame_keys.remove(0);
     }
 
-    /// Get all full GOPs (Group of Pictures) within this buffer.
-    ///
-    /// Useful for muxing where we don't want to write unfinished GOPs since it could introduce bugs
-    /// during playback
-    pub fn get_full_gops(&self) -> Result<BTreeMap<i64, VideoFrameData>> {
-        if let Some(last_gop) = self.get_last_gop_start() {
-            return Ok(self
-                .frames
-                .range(..=last_gop)
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect());
-        };
-
-        return Err(anyhow!("Could not get last GOP start"));
-    }
-
-    pub fn clear(&mut self) {
-        self.frames.clear();
-        self.key_frame_keys.clear();
+    pub fn get_frames(&self) -> &BTreeMap<i64, VideoFrameData> {
+        &self.frames
     }
 }
 
@@ -178,11 +160,15 @@ impl AudioFrameData {
     pub fn get_data(&self) -> &Vec<u8> {
         &self.frame_bytes
     }
+    
+    pub fn set_data(&mut self, data: Vec<u8>) {
+        self.frame_bytes = data;
+    }
 }
 
-const AUDIO_FRAME_SIZE: i64 = 960;
-const AUDIO_TIME_US: i64 = 20_000;
-
+// const AUDIO_FRAME_SIZE: i64 = 960;
+// const AUDIO_TIME_US: i64 = 20_000;
+//
 #[derive(Clone)]
 pub struct AudioBuffer {
     frames: BTreeMap<i64, AudioFrameData>,
@@ -210,8 +196,7 @@ impl AudioBuffer {
     /// encoder.
     /// * `frame` - A [`AudioFrameData`] representing an encoded frame.
     pub fn insert(&mut self, timestamp: i64, frame: AudioFrameData) {
-        let converted_pts = (timestamp / AUDIO_FRAME_SIZE) * AUDIO_TIME_US;
-        self.frames.insert(converted_pts, frame);
+        self.frames.insert(timestamp, frame);
 
         while let (Some(oldest), Some(newest)) = (self.oldest_pts(), self.newest_pts()) {
             if newest - oldest >= self.max_time as i64 {
@@ -240,11 +225,7 @@ impl AudioBuffer {
         self.frames.values().map(|f| f.pts).min()
     }
 
-    pub fn get_frames(&self) -> BTreeMap<i64, AudioFrameData> {
-        self.frames.clone()
-    }
-
-    pub fn clear(&mut self) {
-        self.frames.clear();
+    pub fn get_frames(&self) -> &BTreeMap<i64, AudioFrameData> {
+        &self.frames
     }
 }
