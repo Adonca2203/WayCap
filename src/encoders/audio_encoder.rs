@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 
 use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, Rational};
-use log::debug;
 
 use super::{
     buffer::{AudioBuffer, AudioFrameData},
@@ -56,8 +55,6 @@ impl AudioEncoder {
                 (encoder.frame_size() as i32 * encoder.channels() as i32) as i32;
         }
 
-        debug!("Frame size: {}", encoder.frame_size());
-
         Ok(encoder)
     }
 
@@ -102,13 +99,14 @@ impl AudioEncoder {
                 self.encoder.channel_layout(),
             );
 
+            // Capture time in vec
             frame.plane_mut(0).copy_from_slice(&frame_samples);
             frame.set_pts(Some(self.next_pts));
             frame.set_rate(self.encoder.rate());
 
             self.encoder.send_frame(&frame)?;
             let mut packet = ffmpeg::codec::packet::Packet::empty();
-            while self.encoder.receive_packet(&mut packet).is_ok() {
+            if self.encoder.receive_packet(&mut packet).is_ok() {
                 if let Some(data) = packet.data() {
                     let pts = packet.pts().unwrap_or(0);
                     let frame_data = AudioFrameData::new(data.to_vec(), pts);

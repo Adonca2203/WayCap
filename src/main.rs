@@ -1,9 +1,12 @@
 mod application_config;
 mod dbus;
 mod encoders;
-mod pipewire_capture;
+mod pw_capture;
 
-use std::sync::Arc;
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    time::SystemTime,
+};
 
 use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
@@ -14,8 +17,9 @@ use encoders::{
 };
 use ffmpeg_next::{self as ffmpeg};
 use log::{debug, LevelFilter};
-use pipewire_capture::PipewireCapture;
+use pipewire::{self as pw};
 use portal_screencast::{CursorMode, ScreenCast, SourceType};
+use pw_capture::{audio_stream::AudioCapture, video_stream::VideoCapture};
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
 
@@ -58,11 +62,39 @@ async fn main() -> Result<(), Error> {
     )?));
     let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(config.max_seconds)?));
 
+    let video_ready = Arc::new(AtomicBool::new(false));
+    let audio_ready = Arc::new(AtomicBool::new(false));
+
+    let vr_clone = Arc::clone(&video_ready);
+    let ar_clone = Arc::clone(&audio_ready);
+    pw::init();
+
+    let current_time = SystemTime::now();
+
     std::thread::spawn(move || {
-        debug!("Creating pipewire stream");
-        let _capture =
-            PipewireCapture::new(fd, stream_node, video_sender, audio_sender, config.use_mic)
-                .unwrap();
+        debug!("Starting video stream");
+        let _video = VideoCapture::run(
+            fd,
+            stream_node,
+            video_sender,
+            video_ready,
+            audio_ready,
+            current_time,
+        )
+        .unwrap();
+    });
+
+    std::thread::spawn(move || {
+        debug!("Starting audio stream");
+        let _audio = AudioCapture::run(
+            stream_node,
+            audio_sender,
+            vr_clone,
+            ar_clone,
+            config.use_mic,
+            current_time,
+        )
+        .unwrap();
     });
 
     // Main event loop

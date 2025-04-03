@@ -160,10 +160,6 @@ impl AudioFrameData {
     pub fn get_data(&self) -> &Vec<u8> {
         &self.frame_bytes
     }
-    
-    pub fn set_data(&mut self, data: Vec<u8>) {
-        self.frame_bytes = data;
-    }
 }
 
 // const AUDIO_FRAME_SIZE: i64 = 960;
