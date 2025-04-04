@@ -197,7 +197,7 @@ fn save_buffer(
 
     // Write audio
     let oldest_frame_offset = audio_buffer
-        .oldest_chunk()
+        .oldest_pts()
         .context("Could not get oldest chunk")?;
 
     debug!("AUDIO SAVE START");

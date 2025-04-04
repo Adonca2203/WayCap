@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use log::warn;
+use log::{debug, warn};
 
 /// Represents a single encoded video frame
 #[derive(Clone, Debug)]
@@ -172,6 +172,8 @@ pub struct AudioBuffer {
     /// Maximum duration (in seconds) that the buffer should retain.
     /// Once the difference between the newest and oldest frame exceeds this, older GOPs are trimmed.
     max_time: usize,
+
+    capture_times: Vec<i64>,
 }
 
 impl AudioBuffer {
@@ -179,6 +181,7 @@ impl AudioBuffer {
         Self {
             frames: BTreeMap::new(),
             max_time,
+            capture_times: Vec::new(),
         }
     }
 
@@ -191,23 +194,21 @@ impl AudioBuffer {
     /// * `timestamp` - The presentation timestamp (PTS) of the frame according to the audio
     /// encoder.
     /// * `frame` - A [`AudioFrameData`] representing an encoded frame.
-    pub fn insert(&mut self, timestamp: i64, frame: AudioFrameData) {
+    pub fn insert_frame(&mut self, timestamp: i64, frame: AudioFrameData) {
         self.frames.insert(timestamp, frame);
 
-        while let (Some(oldest), Some(newest)) = (self.oldest_pts(), self.newest_pts()) {
+        while let (Some(oldest), Some(newest)) =
+            (self.capture_times.first(), self.capture_times.last())
+        {
             if newest - oldest >= self.max_time as i64 {
-                self.frames.remove(&oldest);
+                if let Some(oldest_frame) = self.frames.first_entry() {
+                    oldest_frame.remove();
+                    self.capture_times.remove(0);
+                }
             } else {
                 break;
             }
         }
-    }
-
-    /// Returns the presentation timestamp (PTS) of the newest frame in the buffer.
-    ///
-    /// Returns `None` if the buffer is empty.
-    pub fn newest_pts(&self) -> Option<i64> {
-        self.frames.keys().next_back().copied()
     }
 
     /// Returns the presentation timestamp (PTS) of the oldest frame in the buffer.
@@ -217,11 +218,11 @@ impl AudioBuffer {
         self.frames.keys().next().copied()
     }
 
-    pub fn oldest_chunk(&self) -> Option<i64> {
-        self.frames.values().map(|f| f.pts).min()
-    }
-
     pub fn get_frames(&self) -> &BTreeMap<i64, AudioFrameData> {
         &self.frames
+    }
+
+    pub fn insert_capture_time(&mut self, time: i64) {
+        self.capture_times.push(time);
     }
 }

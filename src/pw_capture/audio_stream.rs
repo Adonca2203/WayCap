@@ -128,8 +128,6 @@ impl AudioCapture {
                         0
                     };
 
-                    debug!("Audio elapsed time: {:?}", time_us);
-
                     let data = &mut datas[0];
                     let n_samples = data.chunk().size() / (std::mem::size_of::<f32>()) as u32;
 
