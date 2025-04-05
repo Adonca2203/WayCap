@@ -113,12 +113,21 @@ async fn main() -> Result<(), Error> {
 
                 let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
                 let video_buffer = video_lock.get_buffer();
-                let video_encoder = video_lock.get_encoder();
+                let video_encoder = video_lock
+                    .get_encoder()
+                    .as_ref()
+                    .context("Could not get video encoder")?;
 
                 let audio_buffer = audio_lock.get_buffer();
-                let audio_encoder = audio_lock.get_encoder();
+                let audio_encoder = audio_lock
+                    .get_encoder()
+                    .as_ref()
+                    .context("Could not get audio encoder")?;
 
                 save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
+
+                video_lock.reset_encoder()?;
+                audio_lock.reset_encoder()?;
 
                 debug!("Done saving!");
             },

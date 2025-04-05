@@ -11,7 +11,7 @@ use super::{
 const MIN_RMS: f32 = 0.01;
 
 pub struct AudioEncoder {
-    encoder: ffmpeg::codec::encoder::Audio,
+    encoder: Option<ffmpeg::codec::encoder::Audio>,
     audio_buffer: AudioBuffer,
     next_pts: i64,
     leftover_data: VecDeque<f32>,
@@ -19,7 +19,7 @@ pub struct AudioEncoder {
 
 impl AudioEncoder {
     pub fn new(max_seconds: u32) -> Result<Self, ffmpeg::Error> {
-        let encoder = Self::create_opus_encoder()?;
+        let encoder = Some(Self::create_opus_encoder()?);
         let max_time = max_seconds as usize * ONE_MILLIS;
 
         Ok(Self {
@@ -31,52 +31,54 @@ impl AudioEncoder {
     }
 
     pub fn process(&mut self, audio: &[f32], capture_time: i64) -> Result<(), ffmpeg::Error> {
-        let n_channels = self.encoder.channels() as usize;
-        let total_samples = audio.len();
+        if let Some(ref mut encoder) = self.encoder {
+            let n_channels = encoder.channels() as usize;
+            let total_samples = audio.len();
 
-        if total_samples % n_channels != 0 {
-            return Err(ffmpeg::Error::InvalidData);
-        }
-
-        let frame_size = self.encoder.frame_size() as usize;
-
-        // Boost the audio so that even if system audio level is low
-        // it's still audible in playback
-        let mut mut_audio = Vec::from(audio);
-        Self::boost_with_rms(&mut mut_audio)?;
-        self.leftover_data.extend(mut_audio);
-
-        while self.leftover_data.len() >= frame_size {
-            let frame_samples: Vec<f32> = self.leftover_data.drain(..frame_size).collect();
-            let mut frame = ffmpeg::frame::Audio::new(
-                self.encoder.format(),
-                frame_size,
-                self.encoder.channel_layout(),
-            );
-
-            // Capture time in vec
-            frame.plane_mut(0).copy_from_slice(&frame_samples);
-            frame.set_pts(Some(self.next_pts));
-            frame.set_rate(self.encoder.rate());
-
-            self.audio_buffer.insert_capture_time(capture_time);
-            self.encoder.send_frame(&frame)?;
-            let mut packet = ffmpeg::codec::packet::Packet::empty();
-            if self.encoder.receive_packet(&mut packet).is_ok() {
-                if let Some(data) = packet.data() {
-                    let pts = packet.pts().unwrap_or(0);
-                    let frame_data = AudioFrameData::new(data.to_vec(), pts);
-                    self.audio_buffer.insert_frame(pts, frame_data);
-                }
+            if total_samples % n_channels != 0 {
+                return Err(ffmpeg::Error::InvalidData);
             }
 
-            self.next_pts += frame_size as i64;
+            let frame_size = encoder.frame_size() as usize;
+
+            // Boost the audio so that even if system audio level is low
+            // it's still audible in playback
+            let mut mut_audio = Vec::from(audio);
+            Self::boost_with_rms(&mut mut_audio)?;
+            self.leftover_data.extend(mut_audio);
+
+            while self.leftover_data.len() >= frame_size {
+                let frame_samples: Vec<f32> = self.leftover_data.drain(..frame_size).collect();
+                let mut frame = ffmpeg::frame::Audio::new(
+                    encoder.format(),
+                    frame_size,
+                    encoder.channel_layout(),
+                );
+
+                // Capture time in vec
+                frame.plane_mut(0).copy_from_slice(&frame_samples);
+                frame.set_pts(Some(self.next_pts));
+                frame.set_rate(encoder.rate());
+
+                self.audio_buffer.insert_capture_time(capture_time);
+                encoder.send_frame(&frame)?;
+                let mut packet = ffmpeg::codec::packet::Packet::empty();
+                if encoder.receive_packet(&mut packet).is_ok() {
+                    if let Some(data) = packet.data() {
+                        let pts = packet.pts().unwrap_or(0);
+                        let frame_data = AudioFrameData::new(data.to_vec(), pts);
+                        self.audio_buffer.insert_frame(pts, frame_data);
+                    }
+                }
+
+                self.next_pts += frame_size as i64;
+            }
         }
 
         Ok(())
     }
 
-    pub fn get_encoder(&self) -> &ffmpeg::codec::encoder::Audio {
+    pub fn get_encoder(&self) -> &Option<ffmpeg::codec::encoder::Audio> {
         &self.encoder
     }
 
@@ -86,14 +88,25 @@ impl AudioEncoder {
 
     // Drain remaining frames being processed in the encoder
     pub fn drain(&mut self) -> Result<(), ffmpeg::Error> {
-        let mut packet = ffmpeg::codec::packet::Packet::empty();
-        while self.encoder.receive_packet(&mut packet).is_ok() {
-            if let Some(data) = packet.data() {
-                let pts = packet.pts().unwrap_or(0);
-                let frame_data = AudioFrameData::new(data.to_vec(), pts);
-                self.audio_buffer.insert_frame(pts, frame_data.clone());
+        if let Some(ref mut encoder) = self.encoder {
+            encoder.send_eof()?;
+            let mut packet = ffmpeg::codec::packet::Packet::empty();
+            while encoder.receive_packet(&mut packet).is_ok() {
+                if let Some(data) = packet.data() {
+                    let pts = packet.pts().unwrap_or(0);
+                    let frame_data = AudioFrameData::new(data.to_vec(), pts);
+                    self.audio_buffer.insert_frame(pts, frame_data.clone());
+                }
             }
         }
+        Ok(())
+    }
+
+    pub fn reset_encoder(&mut self) -> Result<(), ffmpeg::Error> {
+        self.encoder.take();
+        self.audio_buffer.reset();
+
+        self.encoder = Some(Self::create_opus_encoder()?);
         Ok(())
     }
 }

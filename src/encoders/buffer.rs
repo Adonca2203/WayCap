@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use log::{debug, warn};
+use log::warn;
 
 /// Represents a single encoded video frame
 #[derive(Clone, Debug)]
@@ -137,6 +137,11 @@ impl VideoBuffer {
     pub fn get_frames(&self) -> &BTreeMap<i64, VideoFrameData> {
         &self.frames
     }
+
+    pub fn reset(&mut self) {
+        self.frames.clear();
+        self.key_frame_keys.clear();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -224,5 +229,10 @@ impl AudioBuffer {
 
     pub fn insert_capture_time(&mut self, time: i64) {
         self.capture_times.push(time);
+    }
+
+    pub fn reset(&mut self) {
+        self.frames.clear();
+        self.capture_times.clear();
     }
 }
