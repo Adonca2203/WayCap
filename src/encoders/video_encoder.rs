@@ -4,7 +4,7 @@ use crate::application_config::{load_or_create_config, QualityPreset};
 
 use super::buffer::{VideoBuffer, VideoFrameData};
 
-pub const ONE_MILLIS: usize = 1_000_000;
+pub const ONE_MICROS: usize = 1_000_000;
 const GOP_SIZE: u32 = 30;
 
 pub struct VideoEncoder {
@@ -26,7 +26,7 @@ impl VideoEncoder {
         ffmpeg::init()?;
 
         let encoder = Some(Self::create_encoder(width, height, encoder_name)?);
-        let max_time = max_buffer_seconds as usize * ONE_MILLIS;
+        let max_time = max_buffer_seconds as usize * ONE_MICROS;
 
         Ok(Self {
             encoder,

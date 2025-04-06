@@ -144,35 +144,9 @@ impl VideoBuffer {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct AudioFrameData {
-    frame_bytes: Vec<u8>,
-    pts: i64,
-}
-
-impl AudioFrameData {
-    pub fn new(data: Vec<u8>, pts: i64) -> Self {
-        Self {
-            frame_bytes: data,
-            pts,
-        }
-    }
-
-    pub fn get_pts(&self) -> &i64 {
-        &self.pts
-    }
-
-    pub fn get_data(&self) -> &Vec<u8> {
-        &self.frame_bytes
-    }
-}
-
-// const AUDIO_FRAME_SIZE: i64 = 960;
-// const AUDIO_TIME_US: i64 = 20_000;
-//
 #[derive(Clone)]
 pub struct AudioBuffer {
-    frames: BTreeMap<i64, AudioFrameData>,
+    frames: BTreeMap<i64, Vec<u8>>,
 
     /// Maximum duration (in seconds) that the buffer should retain.
     /// Once the difference between the newest and oldest frame exceeds this, older GOPs are trimmed.
@@ -199,7 +173,7 @@ impl AudioBuffer {
     /// * `timestamp` - The presentation timestamp (PTS) of the frame according to the audio
     /// encoder.
     /// * `frame` - A [`AudioFrameData`] representing an encoded frame.
-    pub fn insert_frame(&mut self, timestamp: i64, frame: AudioFrameData) {
+    pub fn insert_frame(&mut self, timestamp: i64, frame: Vec<u8>) {
         self.frames.insert(timestamp, frame);
 
         while let (Some(oldest), Some(newest)) =
@@ -223,7 +197,11 @@ impl AudioBuffer {
         self.frames.keys().next().copied()
     }
 
-    pub fn get_frames(&self) -> &BTreeMap<i64, AudioFrameData> {
+    pub fn get_capture_times(&self) -> &Vec<i64> {
+        &self.capture_times
+    }
+
+    pub fn get_frames(&self) -> &BTreeMap<i64, Vec<u8>> {
         &self.frames
     }
 

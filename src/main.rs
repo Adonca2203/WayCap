@@ -16,7 +16,7 @@ use encoders::{
     video_encoder::VideoEncoder,
 };
 use ffmpeg_next::{self as ffmpeg};
-use log::{debug, LevelFilter};
+use log::{debug, info, warn, LevelFilter};
 use pipewire::{self as pw};
 use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use pw_capture::{audio_stream::AudioCapture, video_stream::VideoCapture};
@@ -51,8 +51,10 @@ async fn main() -> Result<(), Error> {
         .build()
         .await?;
 
-    let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(10);
-    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(10);
+    // Need to adjust this buffer size so we don't block the capture threads too long but also keep
+    // it within reason
+    let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(500);
+    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(500);
 
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
@@ -97,6 +99,7 @@ async fn main() -> Result<(), Error> {
         .unwrap();
     });
 
+    let saving = AtomicBool::new(false);
     // Main event loop
     loop {
         tokio::select! {
@@ -106,6 +109,7 @@ async fn main() -> Result<(), Error> {
                     video_encoder.lock(),
                     audio_encoder.lock()
                 );
+                saving.store(true, std::sync::atomic::Ordering::Release);
 
                 // Drain both encoders of any remaining frames being processed
                 video_lock.drain()?;
@@ -128,17 +132,40 @@ async fn main() -> Result<(), Error> {
 
                 video_lock.reset_encoder()?;
                 audio_lock.reset_encoder()?;
+                saving.store(false, std::sync::atomic::Ordering::Release);
 
                 debug!("Done saving!");
             },
             Some((frame, time)) = video_receiver.recv() => {
+                // If we are saving then just drop the frame we don't want it
+                if saving.load(std::sync::atomic::Ordering::Acquire) {
+                    continue;
+                }
+                if video_receiver.capacity() <= 10 {
+                    warn!("Video receiver almost a full capacity. Increase the default buffer size");
+                    warn!("Current max capacity: {:?}", video_receiver.max_capacity());
+                }
                 video_encoder.lock().await.process(&frame, time)?;
             },
             Some((samples, time)) = audio_receiver.recv() => {
+                // If we are saving then just drop the frame we don't want it
+                if saving.load(std::sync::atomic::Ordering::Acquire) {
+                    continue;
+                }
+
+                if audio_receiver.capacity() <= 10 {
+                    warn!("Audio receiver almost a full capacity. Increase the default buffer size");
+                    warn!("Current max capacity: {:?}", audio_receiver.max_capacity());
+                }
                 audio_encoder.lock().await.process(&samples, time)?;
+            },
+            _ = tokio::signal::ctrl_c() => {
+                info!("Shutting down");
+                break;
             }
         }
     }
+    Ok(())
 }
 
 fn save_buffer(
@@ -209,21 +236,24 @@ fn save_buffer(
         .oldest_pts()
         .context("Could not get oldest chunk")?;
 
+    let oldest_capture_time = audio_buffer.get_capture_times();
+
     debug!("AUDIO SAVE START");
-    for (pts_in_micros, frame) in audio_buffer.get_frames() {
+    let mut iter = 0;
+    for (pts, frame) in audio_buffer.get_frames() {
         // Don't write any more audio if we would exceed video (clip to max video)
-        if pts_in_micros > newest_video_pts {
+        if &oldest_capture_time[iter] > newest_video_pts {
             break;
         }
 
-        let offset = frame.get_pts() - oldest_frame_offset;
+        let offset = pts - oldest_frame_offset;
 
         debug!(
             "PTS IN MICROS: {:?}, PTS IN TIME SCALE: {:?}",
-            pts_in_micros, offset
+            oldest_capture_time[iter], offset
         );
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame.get_data());
+        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame);
         packet.set_pts(Some(offset));
         packet.set_dts(Some(offset));
 
@@ -232,6 +262,8 @@ fn save_buffer(
         packet
             .write_interleaved(&mut output)
             .expect("Could not write audio interleaved");
+
+        iter += 1;
     }
     debug!("AUDIO SAVE END");
 

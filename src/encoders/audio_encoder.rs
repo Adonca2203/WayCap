@@ -3,10 +3,7 @@ use std::collections::VecDeque;
 use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, Rational};
 
-use super::{
-    buffer::{AudioBuffer, AudioFrameData},
-    video_encoder::ONE_MILLIS,
-};
+use super::{buffer::AudioBuffer, video_encoder::ONE_MICROS};
 
 const MIN_RMS: f32 = 0.01;
 
@@ -20,7 +17,7 @@ pub struct AudioEncoder {
 impl AudioEncoder {
     pub fn new(max_seconds: u32) -> Result<Self, ffmpeg::Error> {
         let encoder = Some(Self::create_opus_encoder()?);
-        let max_time = max_seconds as usize * ONE_MILLIS;
+        let max_time = max_seconds as usize * ONE_MICROS;
 
         Ok(Self {
             encoder,
@@ -47,6 +44,7 @@ impl AudioEncoder {
             Self::boost_with_rms(&mut mut_audio)?;
             self.leftover_data.extend(mut_audio);
 
+            // Send chunked frames to encoder
             while self.leftover_data.len() >= frame_size {
                 let frame_samples: Vec<f32> = self.leftover_data.drain(..frame_size).collect();
                 let mut frame = ffmpeg::frame::Audio::new(
@@ -62,12 +60,13 @@ impl AudioEncoder {
 
                 self.audio_buffer.insert_capture_time(capture_time);
                 encoder.send_frame(&frame)?;
+
+                // Try and get a frame back from encoder
                 let mut packet = ffmpeg::codec::packet::Packet::empty();
                 if encoder.receive_packet(&mut packet).is_ok() {
                     if let Some(data) = packet.data() {
                         let pts = packet.pts().unwrap_or(0);
-                        let frame_data = AudioFrameData::new(data.to_vec(), pts);
-                        self.audio_buffer.insert_frame(pts, frame_data);
+                        self.audio_buffer.insert_frame(pts, data.to_vec());
                     }
                 }
 
@@ -94,8 +93,7 @@ impl AudioEncoder {
             while encoder.receive_packet(&mut packet).is_ok() {
                 if let Some(data) = packet.data() {
                     let pts = packet.pts().unwrap_or(0);
-                    let frame_data = AudioFrameData::new(data.to_vec(), pts);
-                    self.audio_buffer.insert_frame(pts, frame_data.clone());
+                    self.audio_buffer.insert_frame(pts, data.to_vec());
                 }
             }
         }
