@@ -22,9 +22,6 @@ impl VideoEncoder {
         max_buffer_seconds: u32,
         encoder_name: &str,
     ) -> Result<Self, ffmpeg::Error> {
-        ffmpeg::log::set_level(ffmpeg_next::log::Level::Debug);
-        ffmpeg::init()?;
-
         let encoder = Some(Self::create_encoder(width, height, encoder_name)?);
         let max_time = max_buffer_seconds as usize * ONE_MICROS;
 

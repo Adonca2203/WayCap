@@ -29,6 +29,7 @@ const AUDIO_STREAM: usize = 1;
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
+
     let config = load_or_create_config();
 
     let mut screen_cast = ScreenCast::new()?;
@@ -53,8 +54,8 @@ async fn main() -> Result<(), Error> {
 
     // Need to adjust this buffer size so we don't block the capture threads too long but also keep
     // it within reason
-    let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(500);
-    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(500);
+    let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(1024);
+    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(1024);
 
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
@@ -70,6 +71,8 @@ async fn main() -> Result<(), Error> {
     let vr_clone = Arc::clone(&video_ready);
     let ar_clone = Arc::clone(&audio_ready);
     pw::init();
+    ffmpeg::log::set_level(ffmpeg_next::log::Level::Info);
+    ffmpeg::init()?;
 
     let current_time = SystemTime::now();
 
@@ -105,11 +108,11 @@ async fn main() -> Result<(), Error> {
         tokio::select! {
             _ = save_rx.recv() => {
                 // Stop capturing video and audio while we save by taking out the locks
+                saving.store(true, std::sync::atomic::Ordering::Release);
                 let (mut video_lock, mut audio_lock) = tokio::join!(
                     video_encoder.lock(),
                     audio_encoder.lock()
                 );
-                saving.store(true, std::sync::atomic::Ordering::Release);
 
                 // Drain both encoders of any remaining frames being processed
                 video_lock.drain()?;
@@ -137,15 +140,25 @@ async fn main() -> Result<(), Error> {
                 debug!("Done saving!");
             },
             Some((frame, time)) = video_receiver.recv() => {
+                let now = SystemTime::now();
                 // If we are saving then just drop the frame we don't want it
                 if saving.load(std::sync::atomic::Ordering::Acquire) {
                     continue;
                 }
+
                 if video_receiver.capacity() <= 10 {
                     warn!("Video receiver almost a full capacity. Increase the default buffer size");
                     warn!("Current max capacity: {:?}", video_receiver.max_capacity());
+                    continue;
                 }
+
                 video_encoder.lock().await.process(&frame, time)?;
+
+                // 1024 @ 48khz
+                if now.elapsed().unwrap().as_micros() > 21330 {
+                    warn!("We likely missed a frame in video. Check pipewire logs");
+                    warn!("Took {:?} to execute process.", now.elapsed());
+                }
             },
             Some((samples, time)) = audio_receiver.recv() => {
                 // If we are saving then just drop the frame we don't want it
@@ -153,10 +166,18 @@ async fn main() -> Result<(), Error> {
                     continue;
                 }
 
+                // TODO: Move the RMS logic into it's own thread as sometimes it takes too long and
+                // blocks this thread for too long which causes us to reach capacity and block the
+                // pipewire thread too long causing us to miss frames
+                //
+                // TODO: Figure out how to detect dropped frames and pad audio encoder as it is
+                // causing audio desync
                 if audio_receiver.capacity() <= 10 {
                     warn!("Audio receiver almost a full capacity. Increase the default buffer size");
                     warn!("Current max capacity: {:?}", audio_receiver.max_capacity());
+                    continue;
                 }
+
                 audio_encoder.lock().await.process(&samples, time)?;
             },
             _ = tokio::signal::ctrl_c() => {
