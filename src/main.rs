@@ -115,7 +115,13 @@ async fn main() -> Result<(), Error> {
     let current_time = SystemTime::now();
 
     // Create audio worker thread
-    std::thread::spawn(move || loop {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_audio_clone = Arc::clone(&stop);
+    let audio_worker = std::thread::spawn(move || loop {
+        if stop_audio_clone.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+
         while let Some(mut raw_frame) = audio_ring_receiver.try_pop() {
             let now = SystemTime::now();
             if let Err(e) = audio_encoder_clone.blocking_lock().process(&mut raw_frame) {
@@ -134,7 +140,12 @@ async fn main() -> Result<(), Error> {
     });
 
     // Create video worker
-    std::thread::spawn(move || loop {
+    let stop_video_clone = Arc::clone(&stop);
+    let video_worder = std::thread::spawn(move || loop {
+        if stop_video_clone.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+
         while let Some(raw_frame) = video_ring_receiver.try_pop() {
             let now = SystemTime::now();
             if let Err(e) = video_encoder_clone.blocking_lock().process(&raw_frame) {
@@ -153,8 +164,11 @@ async fn main() -> Result<(), Error> {
         std::thread::sleep(Duration::from_nanos(100));
     });
 
+    let saving = Arc::new(AtomicBool::new(false));
+
     let (pw_video_sender, pw_video_recv) = pw::channel::channel::<Terminate>();
-    std::thread::spawn(move || {
+    let saving_video_clone = Arc::clone(&saving);
+    let pw_video_worker = std::thread::spawn(move || {
         debug!("Starting video stream");
         let _video = VideoCapture::run(
             fd,
@@ -164,12 +178,14 @@ async fn main() -> Result<(), Error> {
             audio_ready,
             current_time,
             pw_video_recv,
+            saving_video_clone,
         )
         .unwrap();
     });
 
     let (pw_audio_sender, pw_audio_recv) = pw::channel::channel::<Terminate>();
-    std::thread::spawn(move || {
+    let saving_audio_clone = Arc::clone(&saving);
+    let pw_audio_worker = std::thread::spawn(move || {
         debug!("Starting audio stream");
         let _audio = AudioCapture::run(
             stream_node,
@@ -179,11 +195,10 @@ async fn main() -> Result<(), Error> {
             config.use_mic,
             current_time,
             pw_audio_recv,
+            saving_audio_clone,
         )
         .unwrap();
     });
-
-    let saving = AtomicBool::new(false);
 
     // Main event loop
     loop {
@@ -225,22 +240,12 @@ async fn main() -> Result<(), Error> {
                 debug!("Done saving!");
             },
             Some(raw_frame) = video_receiver.recv() => {
-                // No-op while saving
-                if saving.load(std::sync::atomic::Ordering::Acquire) {
-                    continue;
-                }
-
                 // Send the data to the worker thread and exit as to not block this one
                 if let Err(_) = video_ring_sender.try_push(raw_frame) {
                     warn!("Trying to push but the video ring buff is full. Consider increasing the max");
                 }
             },
             Some(raw_frame) = audio_receiver.recv() => {
-                // No-op while saving
-                if saving.load(std::sync::atomic::Ordering::Acquire) {
-                    continue;
-                }
-
                 // Send the data to the worker thread and exit as to not block this one
                 if let Err(_) = audio_ring_sender.try_push(raw_frame) {
                     warn!("Trying to push but the audio ring buff is full. Consider increasing the max");
@@ -248,12 +253,26 @@ async fn main() -> Result<(), Error> {
             },
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutting down");
+                stop.store(true, std::sync::atomic::Ordering::Release);
                 let _ = pw_video_sender.send(Terminate);
                 let _ = pw_audio_sender.send(Terminate);
+                let (mut video_lock, mut audio_lock) = tokio::join!(
+                    video_encoder.lock(),
+                    audio_encoder.lock()
+                );
+                video_lock.reset_encoder()?;
+                audio_lock.reset_encoder()?;
+
                 break;
             }
         }
     }
+
+    let _ = audio_worker.join();
+    let _ = video_worder.join();
+    let _ = pw_video_worker.join();
+    let _ = pw_audio_worker.join();
+    debug!("Done shutting down!");
     Ok(())
 }
 

@@ -47,12 +47,13 @@ impl AudioCapture {
         use_mic: bool,
         start_time: SystemTime,
         termination_recv: pw::channel::Receiver<Terminate>,
+        saving: Arc<AtomicBool>,
     ) -> Result<(), pw::Error> {
         let pw_loop = MainLoop::new(None)?;
         let terminate_loop = pw_loop.clone();
 
         let _recv = termination_recv.attach(pw_loop.loop_(), move |_| {
-            debug!("Terminating video capture loop");
+            debug!("Terminating audio capture loop");
             terminate_loop.quit();
         });
 
@@ -124,7 +125,9 @@ impl AudioCapture {
                 None => debug!("Out of audio buffers"),
                 Some(mut buffer) => {
                     // Wait until video is streaming before we try to process
-                    if !video_ready.load(std::sync::atomic::Ordering::Acquire) {
+                    if !video_ready.load(std::sync::atomic::Ordering::Acquire)
+                        || saving.load(std::sync::atomic::Ordering::Acquire)
+                    {
                         return;
                     }
 

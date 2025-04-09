@@ -43,6 +43,7 @@ impl VideoCapture {
         audio_ready: Arc<AtomicBool>,
         start_time: SystemTime,
         termination_recv: pw::channel::Receiver<Terminate>,
+        saving: Arc<AtomicBool>,
     ) -> Result<(), pipewire::Error> {
         let pw_loop = MainLoop::new(None)?;
         let terminate_loop = pw_loop.clone();
@@ -130,7 +131,9 @@ impl VideoCapture {
                     None => debug!("out of buffers"),
                     Some(mut buffer) => {
                         // Wait until audio is streaming before we try to process
-                        if !audio_ready.load(std::sync::atomic::Ordering::Acquire) {
+                        if !audio_ready.load(std::sync::atomic::Ordering::Acquire)
+                            || saving.load(std::sync::atomic::Ordering::Acquire)
+                        {
                             return;
                         }
 
