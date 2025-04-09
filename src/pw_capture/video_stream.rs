@@ -17,6 +17,8 @@ use pw::{properties::properties, spa};
 use spa::pod::Pod;
 use tokio::sync::mpsc;
 
+use crate::{RawVideoFrame, Terminate};
+
 pub struct VideoCapture;
 
 #[derive(Clone, Copy)]
@@ -36,12 +38,20 @@ impl VideoCapture {
     pub fn run(
         pipewire_fd: RawFd,
         stream_node: u32,
-        process_video_callback: mpsc::Sender<(Vec<u8>, i64)>,
+        process_video_callback: mpsc::Sender<RawVideoFrame>,
         video_ready: Arc<AtomicBool>,
         audio_ready: Arc<AtomicBool>,
         start_time: SystemTime,
+        termination_recv: pw::channel::Receiver<Terminate>,
     ) -> Result<(), pipewire::Error> {
         let pw_loop = MainLoop::new(None)?;
+        let terminate_loop = pw_loop.clone();
+
+        let _recv = termination_recv.attach(pw_loop.loop_(), move |_| {
+            debug!("Terminating video capture loop");
+            terminate_loop.quit();
+        });
+
         let pw_context = Context::new(&pw_loop)?;
         let core = pw_context.connect_fd(unsafe { OwnedFd::from_raw_fd(pipewire_fd) }, None)?;
 
@@ -138,9 +148,10 @@ impl VideoCapture {
                         // send frame data to encoder
                         let data = &mut datas[0];
                         if let Some(frame) = data.data() {
-                            if let Err(err) =
-                                process_video_callback.blocking_send((frame.to_vec(), time_us))
-                            {
+                            if let Err(err) = process_video_callback.blocking_send(RawVideoFrame {
+                                bytes: frame.to_vec(),
+                                timestamp: time_us,
+                            }) {
                                 error!("Error sending video frame: {:?}", err);
                             }
                         }

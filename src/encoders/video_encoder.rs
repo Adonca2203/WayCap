@@ -1,6 +1,6 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
 
-use crate::application_config::{load_or_create_config, QualityPreset};
+use crate::{application_config::{load_or_create_config, QualityPreset}, RawVideoFrame};
 
 use super::buffer::{VideoBuffer, VideoFrameData};
 
@@ -34,7 +34,7 @@ impl VideoEncoder {
         })
     }
 
-    pub fn process(&mut self, frame: &[u8], time_micro: i64) -> Result<(), ffmpeg::Error> {
+    pub fn process(&mut self, frame: &RawVideoFrame) -> Result<(), ffmpeg::Error> {
         if let Some(ref mut encoder) = self.encoder {
             let mut src_frame = ffmpeg::util::frame::video::Video::new(
                 ffmpeg_next::format::Pixel::BGRA,
@@ -42,8 +42,8 @@ impl VideoEncoder {
                 encoder.height(),
             );
 
-            src_frame.set_pts(Some(time_micro));
-            src_frame.data_mut(0).copy_from_slice(frame);
+            src_frame.set_pts(Some(frame.timestamp));
+            src_frame.data_mut(0).copy_from_slice(frame.get_bytes());
 
             encoder.send_frame(&src_frame).unwrap();
 

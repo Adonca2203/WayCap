@@ -5,7 +5,7 @@ mod pw_capture;
 
 use std::{
     sync::{atomic::AtomicBool, Arc},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Error, Result};
@@ -16,21 +16,54 @@ use encoders::{
     video_encoder::VideoEncoder,
 };
 use ffmpeg_next::{self as ffmpeg};
-use log::{debug, info, warn, LevelFilter};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use pipewire::{self as pw};
 use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use pw_capture::{audio_stream::AudioCapture, video_stream::VideoCapture};
+use ringbuf::{
+    traits::{Consumer, Producer, Split},
+    HeapRb,
+};
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
 
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
 
+pub struct RawAudioFrame {
+    samples: Vec<f32>,
+    timestamp: i64,
+}
+
+impl RawAudioFrame {
+    pub fn get_samples_mut(&mut self) -> &mut Vec<f32> {
+        &mut self.samples
+    }
+
+    pub fn get_samples(&mut self) -> &Vec<f32> {
+        &self.samples
+    }
+}
+
+pub struct RawVideoFrame {
+    bytes: Vec<u8>,
+    timestamp: i64,
+}
+
+impl RawVideoFrame {
+    pub fn get_bytes(&self) -> &Vec<u8> {
+        &self.bytes
+    }
+}
+
+pub struct Terminate;
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
 
     let config = load_or_create_config();
+    debug!("CONFIG: {:?}", config);
 
     let mut screen_cast = ScreenCast::new()?;
     screen_cast.set_source_types(SourceType::MONITOR);
@@ -52,30 +85,75 @@ async fn main() -> Result<(), Error> {
         .build()
         .await?;
 
-    // Need to adjust this buffer size so we don't block the capture threads too long but also keep
-    // it within reason
-    let (video_sender, mut video_receiver) = mpsc::channel::<(Vec<u8>, i64)>(1024);
-    let (audio_sender, mut audio_receiver) = mpsc::channel::<(Vec<f32>, i64)>(1024);
-
+    // Video
     let video_encoder = Arc::new(Mutex::new(VideoEncoder::new(
         width,
         height,
         config.max_seconds,
         &config.encoder,
     )?));
-    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(config.max_seconds)?));
-
+    let video_encoder_clone = Arc::clone(&video_encoder);
     let video_ready = Arc::new(AtomicBool::new(false));
-    let audio_ready = Arc::new(AtomicBool::new(false));
-
     let vr_clone = Arc::clone(&video_ready);
+    let (video_sender, mut video_receiver) = mpsc::channel::<RawVideoFrame>(500);
+    let video_ring_buffer = HeapRb::<RawVideoFrame>::new(500);
+    let (mut video_ring_sender, mut video_ring_receiver) = video_ring_buffer.split();
+
+    // Audio
+    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(config.max_seconds)?));
+    let audio_encoder_clone = Arc::clone(&audio_encoder);
+    let audio_ready = Arc::new(AtomicBool::new(false));
+    let (audio_sender, mut audio_receiver) = mpsc::channel::<RawAudioFrame>(10);
+    let audio_ring_buffer = HeapRb::<RawAudioFrame>::new(10);
+    let (mut audio_ring_sender, mut audio_ring_receiver) = audio_ring_buffer.split();
     let ar_clone = Arc::clone(&audio_ready);
+
     pw::init();
     ffmpeg::log::set_level(ffmpeg_next::log::Level::Info);
     ffmpeg::init()?;
 
     let current_time = SystemTime::now();
 
+    // Create audio worker thread
+    std::thread::spawn(move || loop {
+        while let Some(mut raw_frame) = audio_ring_receiver.try_pop() {
+            let now = SystemTime::now();
+            if let Err(e) = audio_encoder_clone.blocking_lock().process(&mut raw_frame) {
+                error!(
+                    "Error processing audio frame at {:?}: {:?}",
+                    raw_frame.timestamp, e
+                );
+            }
+            trace!(
+                "Took {:?} to process this audio frame at {:?}",
+                now.elapsed(),
+                raw_frame.timestamp
+            );
+        }
+        std::thread::sleep(Duration::from_nanos(100));
+    });
+
+    // Create video worker
+    std::thread::spawn(move || loop {
+        while let Some(raw_frame) = video_ring_receiver.try_pop() {
+            let now = SystemTime::now();
+            if let Err(e) = video_encoder_clone.blocking_lock().process(&raw_frame) {
+                error!(
+                    "Error processing video frame at {:?}: {:?}",
+                    raw_frame.timestamp, e
+                );
+            }
+
+            trace!(
+                "Took {:?} to process this video frame at {:?}",
+                now.elapsed(),
+                raw_frame.timestamp
+            );
+        }
+        std::thread::sleep(Duration::from_nanos(100));
+    });
+
+    let (pw_video_sender, pw_video_recv) = pw::channel::channel::<Terminate>();
     std::thread::spawn(move || {
         debug!("Starting video stream");
         let _video = VideoCapture::run(
@@ -85,10 +163,12 @@ async fn main() -> Result<(), Error> {
             video_ready,
             audio_ready,
             current_time,
+            pw_video_recv,
         )
         .unwrap();
     });
 
+    let (pw_audio_sender, pw_audio_recv) = pw::channel::channel::<Terminate>();
     std::thread::spawn(move || {
         debug!("Starting audio stream");
         let _audio = AudioCapture::run(
@@ -98,11 +178,13 @@ async fn main() -> Result<(), Error> {
             ar_clone,
             config.use_mic,
             current_time,
+            pw_audio_recv,
         )
         .unwrap();
     });
 
     let saving = AtomicBool::new(false);
+
     // Main event loop
     loop {
         tokio::select! {
@@ -135,53 +217,39 @@ async fn main() -> Result<(), Error> {
 
                 video_lock.reset_encoder()?;
                 audio_lock.reset_encoder()?;
+
+                drop(video_lock);
+                drop(audio_lock);
                 saving.store(false, std::sync::atomic::Ordering::Release);
 
                 debug!("Done saving!");
             },
-            Some((frame, time)) = video_receiver.recv() => {
-                let now = SystemTime::now();
-                // If we are saving then just drop the frame we don't want it
+            Some(raw_frame) = video_receiver.recv() => {
+                // No-op while saving
                 if saving.load(std::sync::atomic::Ordering::Acquire) {
                     continue;
                 }
 
-                if video_receiver.capacity() <= 10 {
-                    warn!("Video receiver almost a full capacity. Increase the default buffer size");
-                    warn!("Current max capacity: {:?}", video_receiver.max_capacity());
-                    continue;
-                }
-
-                video_encoder.lock().await.process(&frame, time)?;
-
-                // 1024 @ 48khz
-                if now.elapsed().unwrap().as_micros() > 21330 {
-                    warn!("We likely missed a frame in video. Check pipewire logs");
-                    warn!("Took {:?} to execute process.", now.elapsed());
+                // Send the data to the worker thread and exit as to not block this one
+                if let Err(_) = video_ring_sender.try_push(raw_frame) {
+                    warn!("Trying to push but the video ring buff is full. Consider increasing the max");
                 }
             },
-            Some((samples, time)) = audio_receiver.recv() => {
-                // If we are saving then just drop the frame we don't want it
+            Some(raw_frame) = audio_receiver.recv() => {
+                // No-op while saving
                 if saving.load(std::sync::atomic::Ordering::Acquire) {
                     continue;
                 }
 
-                // TODO: Move the RMS logic into it's own thread as sometimes it takes too long and
-                // blocks this thread for too long which causes us to reach capacity and block the
-                // pipewire thread too long causing us to miss frames
-                //
-                // TODO: Figure out how to detect dropped frames and pad audio encoder as it is
-                // causing audio desync
-                if audio_receiver.capacity() <= 10 {
-                    warn!("Audio receiver almost a full capacity. Increase the default buffer size");
-                    warn!("Current max capacity: {:?}", audio_receiver.max_capacity());
-                    continue;
+                // Send the data to the worker thread and exit as to not block this one
+                if let Err(_) = audio_ring_sender.try_push(raw_frame) {
+                    warn!("Trying to push but the audio ring buff is full. Consider increasing the max");
                 }
-
-                audio_encoder.lock().await.process(&samples, time)?;
             },
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutting down");
+                let _ = pw_video_sender.send(Terminate);
+                let _ = pw_audio_sender.send(Terminate);
                 break;
             }
         }

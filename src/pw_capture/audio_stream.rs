@@ -21,6 +21,8 @@ use pipewire::{
 };
 use tokio::sync::mpsc;
 
+use crate::{RawAudioFrame, Terminate};
+
 #[derive(Clone, Copy)]
 struct UserData {
     audio_format: spa::param::audio::AudioInfoRaw,
@@ -39,13 +41,21 @@ pub struct AudioCapture;
 impl AudioCapture {
     pub fn run(
         stream_node: u32,
-        process_audio_channel: mpsc::Sender<(Vec<f32>, i64)>,
+        process_audio_channel: mpsc::Sender<RawAudioFrame>,
         video_ready: Arc<AtomicBool>,
         audio_ready: Arc<AtomicBool>,
         use_mic: bool,
         start_time: SystemTime,
+        termination_recv: pw::channel::Receiver<Terminate>,
     ) -> Result<(), pw::Error> {
         let pw_loop = MainLoop::new(None)?;
+        let terminate_loop = pw_loop.clone();
+
+        let _recv = termination_recv.attach(pw_loop.loop_(), move |_| {
+            debug!("Terminating video capture loop");
+            terminate_loop.quit();
+        });
+
         let pw_context = Context::new(&pw_loop)?;
         let audio_core = pw_context.connect(None)?;
 
@@ -136,7 +146,10 @@ impl AudioCapture {
                         let samples_f32: &[f32] = bytemuck::cast_slice(samples);
                         let audio_samples = &samples_f32[..n_samples as usize];
                         process_audio_channel
-                            .blocking_send((audio_samples.to_vec(), time_us))
+                            .blocking_send(RawAudioFrame {
+                                samples: audio_samples.to_vec(),
+                                timestamp: time_us,
+                            })
                             .unwrap();
                     }
                 }

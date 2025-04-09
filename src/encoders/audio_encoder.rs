@@ -3,6 +3,8 @@ use std::collections::VecDeque;
 use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, Rational};
 
+use crate::RawAudioFrame;
+
 use super::{buffer::AudioBuffer, video_encoder::ONE_MICROS};
 
 const MIN_RMS: f32 = 0.01;
@@ -27,10 +29,10 @@ impl AudioEncoder {
         })
     }
 
-    pub fn process(&mut self, audio: &[f32], capture_time: i64) -> Result<(), ffmpeg::Error> {
+    pub fn process(&mut self, raw_frame: &mut RawAudioFrame) -> Result<(), ffmpeg::Error> {
         if let Some(ref mut encoder) = self.encoder {
             let n_channels = encoder.channels() as usize;
-            let total_samples = audio.len();
+            let total_samples = raw_frame.samples.len();
 
             if total_samples % n_channels != 0 {
                 return Err(ffmpeg::Error::InvalidData);
@@ -40,9 +42,8 @@ impl AudioEncoder {
 
             // Boost the audio so that even if system audio level is low
             // it's still audible in playback
-            let mut mut_audio = Vec::from(audio);
-            Self::boost_with_rms(&mut mut_audio)?;
-            self.leftover_data.extend(mut_audio);
+            Self::boost_with_rms(raw_frame.get_samples_mut())?;
+            self.leftover_data.extend(raw_frame.get_samples());
 
             // Send chunked frames to encoder
             while self.leftover_data.len() >= frame_size {
@@ -58,7 +59,7 @@ impl AudioEncoder {
                 frame.set_pts(Some(self.next_pts));
                 frame.set_rate(encoder.rate());
 
-                self.audio_buffer.insert_capture_time(capture_time);
+                self.audio_buffer.insert_capture_time(raw_frame.timestamp);
                 encoder.send_frame(&frame)?;
 
                 // Try and get a frame back from encoder
