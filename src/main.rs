@@ -313,16 +313,32 @@ fn save_buffer(
         .context("Could not get last keyframe")?
         .get_pts();
 
+    let oldest_capture_time = audio_buffer.get_capture_times();
+
     // Write video
-    let first_pts_offset = video_buffer
+    let mut first_pts_offset = video_buffer
         .oldest_pts()
         .context("Could not get oldest pts when muxing.")?;
+    let mut first_offset = false;
     debug!("VIDEO SAVE START");
     for (dts, frame_data) in video_buffer.get_frames().range(..=last_keyframe) {
+        // If video starts before audio try and catch up as much as possible
+        // (At worst a 20ms gap)
+        if &oldest_capture_time[0] > frame_data.get_pts() {
+            continue;
+        }
+        if first_offset == false {
+            first_pts_offset = *frame_data.get_pts();
+            first_offset = true;
+        }
         let pts_offset = frame_data.get_pts() - first_pts_offset;
         let mut dts_offset = dts - first_pts_offset;
 
-        debug!("PTS offset: {:?}", pts_offset);
+        debug!(
+            "Capture Timestamp: {:?}, PTS offset: {:?}",
+            frame_data.get_pts(),
+            pts_offset
+        );
         if dts_offset < 0 {
             dts_offset = 0;
         }
@@ -344,14 +360,25 @@ fn save_buffer(
         .oldest_pts()
         .context("Could not get oldest chunk")?;
 
-    let oldest_capture_time = audio_buffer.get_capture_times();
-
     debug!("AUDIO SAVE START");
     let mut iter = 0;
     for (pts, frame) in audio_buffer.get_frames() {
         // Don't write any more audio if we would exceed video (clip to max video)
         if &oldest_capture_time[iter] > newest_video_pts {
+            debug!(
+                "Oldest capture time {:?}, in time scale: {:?}",
+                oldest_capture_time[iter], pts
+            );
             break;
+        }
+        // If audio starts before video try and catch up as much as possible
+        // (At worst a 20ms gap)
+        if &oldest_capture_time[iter] < &first_pts_offset {
+            debug!("Audio timestamp is before video, skipping writing this one");
+            debug!(
+                "Capture time: {:?}, Video time: {:?}",
+                oldest_capture_time[iter], first_pts_offset
+            );
         }
 
         let offset = pts - oldest_frame_offset;

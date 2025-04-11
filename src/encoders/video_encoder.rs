@@ -1,6 +1,9 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
 
-use crate::{application_config::{load_or_create_config, QualityPreset}, RawVideoFrame};
+use crate::{
+    application_config::{load_or_create_config, QualityPreset},
+    RawVideoFrame,
+};
 
 use super::buffer::{VideoBuffer, VideoFrameData};
 
