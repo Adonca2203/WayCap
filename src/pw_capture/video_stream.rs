@@ -14,8 +14,8 @@ use pipewire::{
 };
 use pw::{properties::properties, spa};
 
+use ringbuf::{traits::Producer, HeapProd};
 use spa::pod::Pod;
-use tokio::sync::mpsc;
 
 use crate::{RawVideoFrame, Terminate};
 
@@ -38,7 +38,7 @@ impl VideoCapture {
     pub fn run(
         pipewire_fd: RawFd,
         stream_node: u32,
-        process_video_callback: mpsc::Sender<RawVideoFrame>,
+        mut ringbuf_producer: HeapProd<RawVideoFrame>,
         video_ready: Arc<AtomicBool>,
         audio_ready: Arc<AtomicBool>,
         start_time: SystemTime,
@@ -76,7 +76,7 @@ impl VideoCapture {
             },
         )?;
 
-        let _video_stream_shared_data_listener = video_stream
+        let _video_stream = video_stream
             .add_local_listener_with_user_data(data)
             .state_changed(move |_, _, old, new| {
                 debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
@@ -108,7 +108,7 @@ impl VideoCapture {
                 user_data
                     .video_format
                     .parse(param)
-                    .expect("Faield to parse param");
+                    .expect("Failed to parse param");
 
                 debug!(
                     "  format: {} ({:?})",
@@ -151,20 +151,16 @@ impl VideoCapture {
                         // send frame data to encoder
                         let data = &mut datas[0];
                         if let Some(frame) = data.data() {
-                            if let Err(err) = process_video_callback.blocking_send(RawVideoFrame {
+                            if let Err(frame) = ringbuf_producer.try_push(RawVideoFrame {
                                 bytes: frame.to_vec(),
                                 timestamp: time_us,
                             }) {
-                                error!("Error sending video frame: {:?}", err);
+                                error!("Error sending video frame: {:?}. Ring buf full?", frame);
                             }
                         }
                     }
                 }
             })
-            .register()?;
-
-        let _video_stream_listener = video_stream
-            .add_local_listener_with_user_data(data)
             .register()?;
 
         let video_spa_obj = pw::spa::pod::object!(

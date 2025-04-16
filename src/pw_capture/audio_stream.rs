@@ -19,7 +19,7 @@ use pipewire::{
     },
     stream::{StreamFlags, StreamState},
 };
-use tokio::sync::mpsc;
+use ringbuf::{traits::Producer, HeapProd};
 
 use crate::{RawAudioFrame, Terminate};
 
@@ -41,7 +41,7 @@ pub struct AudioCapture;
 impl AudioCapture {
     pub fn run(
         stream_node: u32,
-        process_audio_channel: mpsc::Sender<RawAudioFrame>,
+        mut ringbuf_producer: HeapProd<RawAudioFrame>,
         video_ready: Arc<AtomicBool>,
         audio_ready: Arc<AtomicBool>,
         use_mic: bool,
@@ -148,12 +148,15 @@ impl AudioCapture {
                     if let Some(samples) = data.data() {
                         let samples_f32: &[f32] = bytemuck::cast_slice(samples);
                         let audio_samples = &samples_f32[..n_samples as usize];
-                        process_audio_channel
-                            .blocking_send(RawAudioFrame {
-                                samples: audio_samples.to_vec(),
-                                timestamp: time_us,
-                            })
-                            .unwrap();
+                        if let Err(frame) = ringbuf_producer.try_push(RawAudioFrame {
+                            samples: audio_samples.to_vec(),
+                            timestamp: time_us,
+                        }) {
+                            error!(
+                                "Could not add audio frame: {:?}. Is the buffer full?",
+                                frame
+                            );
+                        }
                     }
                 }
             })
