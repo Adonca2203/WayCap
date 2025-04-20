@@ -48,7 +48,7 @@ impl VideoEncoder for NvencEncoder {
                 encoder.height(),
             );
 
-            src_frame.set_pts(Some(frame.timestamp));
+            src_frame.set_pts(Some(*frame.get_timestamp()));
             src_frame.data_mut(0).copy_from_slice(frame.get_bytes());
 
             encoder.send_frame(&src_frame).unwrap();
