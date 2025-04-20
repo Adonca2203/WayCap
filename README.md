@@ -14,7 +14,7 @@ Use `busctl --user call com.rust.WayCap /com/rust/WayCap com.rust.WayCap SaveCli
 - [x] Captures video using pipewire.
 - [x] Captures audio using pipewire.
 - [x] On dbus command, saves what it has captures to a .mp4 file.
-- [x] Uses GPU to encode frames to reduce CPU overhead. (Supports NVIDIA with h264.nvenc and ADM with h264.vaapi) 
+- [x] Uses GPU to encode frames to reduce CPU overhead. (Supports NVIDIA with h264.nvenc and AMD with h264.vaapi) 
 - [x] Customize certain options via an user level config file in ~/.config
 - [ ] Automatic game detection.
 - [ ] Front end GUI for customizing settings.
@@ -58,7 +58,7 @@ busctl --user call com.rust.WayCap /com/rust/WayCap com.rust.WayCap UpdateConfig
 ## Installation Guide
 Clone this repository via
 ```
-git clone https://github.com/Adonca2203/screen-recorder.git
+git clone https://github.com/Adonca2203/WayCap.git
 ```
 Build the project (debug build) via
 ```
