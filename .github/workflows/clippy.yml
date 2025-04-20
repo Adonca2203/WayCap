@@ -1,0 +1,26 @@
+name: Clippy Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  clippy:
+    name: Run Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          profile: minimal
+          override: true
+
+      - name: Run cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings

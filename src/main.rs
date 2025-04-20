@@ -1,3 +1,11 @@
+#![deny(
+    clippy::all,
+    clippy::correctness,
+    clippy::style,
+    clippy::complexity,
+    clippy::perf
+)]
+
 mod application_config;
 mod dbus;
 mod encoders;
@@ -5,6 +13,7 @@ mod pw_capture;
 
 use std::{
     sync::{atomic::AtomicBool, Arc},
+    thread::JoinHandle,
     time::{Duration, SystemTime},
 };
 
@@ -24,7 +33,7 @@ use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use pw_capture::{audio_stream::AudioCapture, video_stream::VideoCapture};
 use ringbuf::{
     traits::{Consumer, Split},
-    HeapRb,
+    HeapCons, HeapRb,
 };
 use tokio::sync::{mpsc, Mutex};
 use zbus::connection;
@@ -123,14 +132,14 @@ async fn main() -> Result<(), Error> {
     let video_ready = Arc::new(AtomicBool::new(false));
     let vr_clone = Arc::clone(&video_ready);
     let video_ring_buffer = HeapRb::<RawVideoFrame>::new(500);
-    let (video_ring_sender, mut video_ring_receiver) = video_ring_buffer.split();
+    let (video_ring_sender, video_ring_receiver) = video_ring_buffer.split();
 
     // Audio
     let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(config.max_seconds)?));
     let audio_encoder_clone = Arc::clone(&audio_encoder);
     let audio_ready = Arc::new(AtomicBool::new(false));
     let audio_ring_buffer = HeapRb::<RawAudioFrame>::new(10);
-    let (audio_ring_sender, mut audio_ring_receiver) = audio_ring_buffer.split();
+    let (audio_ring_sender, audio_ring_receiver) = audio_ring_buffer.split();
     let ar_clone = Arc::clone(&audio_ready);
 
     pw::init();
@@ -141,64 +150,13 @@ async fn main() -> Result<(), Error> {
     // Create audio worker thread
     let stop = Arc::new(AtomicBool::new(false));
     let stop_audio_clone = Arc::clone(&stop);
-    let audio_worker = std::thread::spawn(move || loop {
-        if stop_audio_clone.load(std::sync::atomic::Ordering::Acquire) {
-            break;
-        }
-
-        while let Some(mut raw_frame) = audio_ring_receiver.try_pop() {
-            let now = SystemTime::now();
-            if let Err(e) = audio_encoder_clone.blocking_lock().process(&mut raw_frame) {
-                error!(
-                    "Error processing audio frame at {:?}: {:?}",
-                    raw_frame.timestamp, e
-                );
-            }
-            trace!(
-                "Took {:?} to process this audio frame at {:?}",
-                now.elapsed(),
-                raw_frame.timestamp
-            );
-        }
-        std::thread::sleep(Duration::from_nanos(100));
-    });
+    let audio_worker =
+        create_audio_worker(stop_audio_clone, audio_ring_receiver, audio_encoder_clone);
 
     // Create video worker
     let stop_video_clone = Arc::clone(&stop);
-    let video_worker = std::thread::spawn(move || {
-        let mut last_timestamp: u64 = 0;
-        loop {
-            if stop_video_clone.load(std::sync::atomic::Ordering::Acquire) {
-                break;
-            }
-
-            while let Some(raw_frame) = video_ring_receiver.try_pop() {
-                let now = SystemTime::now();
-                let current_time = raw_frame.timestamp as u64;
-
-                // Throttle FPS
-                if current_time < last_timestamp + FRAME_INTERVAL {
-                    continue;
-                }
-
-                last_timestamp = current_time;
-                if let Err(e) = video_encoder_clone.blocking_lock().process(&raw_frame) {
-                    error!(
-                        "Error processing video frame at {:?}: {:?}",
-                        raw_frame.timestamp, e
-                    );
-                }
-
-                trace!(
-                    "Took {:?} to process this video frame at {:?}",
-                    now.elapsed(),
-                    raw_frame.timestamp
-                );
-            }
-            std::thread::sleep(Duration::from_nanos(100));
-        }
-    });
-
+    let video_worker =
+        create_video_worker(stop_video_clone, video_ring_receiver, video_encoder_clone);
     let saving = Arc::new(AtomicBool::new(false));
 
     let (pw_video_sender, pw_video_recv) = pw::channel::channel::<Terminate>();
@@ -426,4 +384,71 @@ fn save_buffer(
     output.write_trailer()?;
 
     Ok(())
+}
+fn create_audio_worker(
+    stop_audio: Arc<AtomicBool>,
+    mut audio_receiver: HeapCons<RawAudioFrame>,
+    audio_encoder: Arc<Mutex<AudioEncoder>>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || loop {
+        if stop_audio.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+
+        while let Some(mut raw_frame) = audio_receiver.try_pop() {
+            let now = SystemTime::now();
+            if let Err(e) = audio_encoder.blocking_lock().process(&mut raw_frame) {
+                error!(
+                    "Error processing audio frame at {:?}: {:?}",
+                    raw_frame.timestamp, e
+                );
+            }
+            trace!(
+                "Took {:?} to process this audio frame at {:?}",
+                now.elapsed(),
+                raw_frame.timestamp
+            );
+        }
+        std::thread::sleep(Duration::from_nanos(100));
+    })
+}
+
+fn create_video_worker(
+    stop_video: Arc<AtomicBool>,
+    mut video_receiver: HeapCons<RawVideoFrame>,
+    video_encoder: Arc<Mutex<dyn VideoEncoder + Send>>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut last_timestamp: u64 = 0;
+        loop {
+            if stop_video.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+
+            while let Some(raw_frame) = video_receiver.try_pop() {
+                let now = SystemTime::now();
+                let current_time = *raw_frame.get_timestamp() as u64;
+
+                // Throttle FPS
+                if current_time < last_timestamp + FRAME_INTERVAL {
+                    continue;
+                }
+
+                last_timestamp = current_time;
+                if let Err(e) = video_encoder.blocking_lock().process(&raw_frame) {
+                    error!(
+                        "Error processing video frame at {:?}: {:?}",
+                        raw_frame.timestamp, e
+                    );
+                }
+
+                trace!(
+                    "Took {:?} to process this video frame at {:?}",
+                    now.elapsed(),
+                    raw_frame.timestamp
+                );
+            }
+            std::thread::sleep(Duration::from_nanos(100));
+        }
+    })
 }
