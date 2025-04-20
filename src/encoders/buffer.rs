@@ -26,6 +26,10 @@ impl VideoFrameData {
     pub fn get_pts(&self) -> &i64 {
         &self.pts
     }
+
+    pub fn is_key(&self) -> &bool {
+        &self.is_key
+    }
 }
 
 /// Rolling buffer which holds up to the last `max_time` seconds of video frames.
@@ -171,7 +175,7 @@ impl AudioBuffer {
     /// # Arguments
     ///
     /// * `timestamp` - The presentation timestamp (PTS) of the frame according to the audio
-    /// encoder.
+    ///   encoder.
     /// * `frame` - A [`AudioFrameData`] representing an encoded frame.
     pub fn insert_frame(&mut self, timestamp: i64, frame: Vec<u8>) {
         self.frames.insert(timestamp, frame);
@@ -188,13 +192,6 @@ impl AudioBuffer {
                 break;
             }
         }
-    }
-
-    /// Returns the presentation timestamp (PTS) of the oldest frame in the buffer.
-    ///
-    /// Returns `None` if the buffer is empty.
-    pub fn oldest_pts(&self) -> Option<i64> {
-        self.frames.keys().next().copied()
     }
 
     pub fn get_capture_times(&self) -> &Vec<i64> {

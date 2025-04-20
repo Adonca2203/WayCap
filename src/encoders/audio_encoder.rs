@@ -101,9 +101,13 @@ impl AudioEncoder {
         Ok(())
     }
 
-    pub fn reset_encoder(&mut self) -> Result<(), ffmpeg::Error> {
+    pub fn drop_encoder(&mut self) {
         self.encoder.take();
         self.audio_buffer.reset();
+    }
+
+    pub fn reset_encoder(&mut self) -> Result<(), ffmpeg::Error> {
+        self.drop_encoder();
 
         self.encoder = Some(Self::create_opus_encoder()?);
         Ok(())

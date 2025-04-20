@@ -19,29 +19,22 @@ use pipewire::{
     },
     stream::{StreamFlags, StreamState},
 };
-use tokio::sync::mpsc;
+use ringbuf::{traits::Producer, HeapProd};
 
 use crate::{RawAudioFrame, Terminate};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct UserData {
     audio_format: spa::param::audio::AudioInfoRaw,
-}
-
-impl Default for UserData {
-    fn default() -> Self {
-        Self {
-            audio_format: Default::default(),
-        }
-    }
 }
 
 pub struct AudioCapture;
 
 impl AudioCapture {
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         stream_node: u32,
-        process_audio_channel: mpsc::Sender<RawAudioFrame>,
+        mut ringbuf_producer: HeapProd<RawAudioFrame>,
         video_ready: Arc<AtomicBool>,
         audio_ready: Arc<AtomicBool>,
         use_mic: bool,
@@ -72,7 +65,7 @@ impl AudioCapture {
         // Audio Stream
         let audio_stream = pw::stream::Stream::new(
             &audio_core,
-            "auto-screen-recorder-audio",
+            "waycap-audio",
             properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CATEGORY => "Capture",
@@ -148,12 +141,15 @@ impl AudioCapture {
                     if let Some(samples) = data.data() {
                         let samples_f32: &[f32] = bytemuck::cast_slice(samples);
                         let audio_samples = &samples_f32[..n_samples as usize];
-                        process_audio_channel
-                            .blocking_send(RawAudioFrame {
-                                samples: audio_samples.to_vec(),
-                                timestamp: time_us,
-                            })
-                            .unwrap();
+                        if let Err(frame) = ringbuf_producer.try_push(RawAudioFrame {
+                            samples: audio_samples.to_vec(),
+                            timestamp: time_us,
+                        }) {
+                            error!(
+                                "Could not add audio frame: {:?}. Is the buffer full?",
+                                frame
+                            );
+                        }
                     }
                 }
             })
