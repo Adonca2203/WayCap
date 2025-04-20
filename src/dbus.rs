@@ -2,11 +2,11 @@ use log::debug;
 use tokio::sync::mpsc;
 use zbus::interface;
 
-use crate::application_config::AppConfig;
+use crate::application_config::{AppConfig, AppConfigDbus};
 
 pub trait GameClip {
     async fn save_clip(&self);
-    async fn update_config(&self, new_config: AppConfig);
+    async fn update_config(&self, new_config: AppConfigDbus) -> zbus::fdo::Result<()>;
 }
 
 pub struct ClipService {
@@ -27,7 +27,9 @@ impl GameClip for ClipService {
         debug!("Save clip received!");
     }
 
-    async fn update_config(&self, new_config: AppConfig) {
-        let _ = self.config_tx.send(new_config).await;
+    async fn update_config(&self, new_config: AppConfigDbus) -> zbus::fdo::Result<()> {
+        let config = AppConfig::try_from(new_config).map_err(zbus::fdo::Error::Failed)?;
+        let _ = self.config_tx.send(config).await;
+        Ok(())
     }
 }

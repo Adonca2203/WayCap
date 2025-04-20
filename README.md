@@ -37,13 +37,22 @@ The application will automatically create a default one for you if it is not pre
 encoder = "h264_vaapi" # h264_nvenc | h264_vaapi
 max_seconds = 300 # 5 minutes is the default but can be anything -- be aware this can have impact on performance as this grows bigger
 use_mic = false # true | false
-quality = "MEDIUM" # LOW | MEDIUM | HIGH | HIGHEST -- impacts file size and can impact performance
+quality = "MEDIUM" # LOW | MEDIUM | HIGH | ULTRA -- impacts file size and can impact performance
 ```
 The comments are the available options.
 
+You can also update the config via dbus call with the following
+```bash
+ENCODER=h264_vaapi
+MAX_SECONDS=300
+USE_MIC=false
+QUALITY=medium
+busctl --user call com.rust.WayCap /com/rust/WayCap com.rust.WayCap UpdateConfig '(subs)' $ENCODER $MAX_SECONDS $USE_MIC $QUALITY
+```
+
 ### Minimum Requirement
 - NVIDIA GPU with CUDA capabilities or AMD GPU with mesa drivers
-- Wayland as your communication server for your desktop environment. (X11 planned but not priority)
+- Wayland as your communication server for your desktop environment.
 - Rust/Cargo installation [link](https://www.rust-lang.org/tools/install) to build the project.
 
 ## Installation Guide
