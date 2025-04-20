@@ -20,7 +20,7 @@ use super::{
 };
 
 thread_local! {
-    static SCALER: RefCell<Option<Scaler>> = RefCell::new(None);
+    static SCALER: RefCell<Option<Scaler>> = const { RefCell::new(None) };
 }
 
 pub struct VaapiEncoder {
@@ -41,7 +41,7 @@ impl VideoEncoder for VaapiEncoder {
     where
         Self: Sized,
     {
-        let encoder = Self::create_encoder(width, height, &encoder_name)?;
+        let encoder = Self::create_encoder(width, height, encoder_name)?;
         Ok(Self {
             encoder: Some(encoder),
             video_buffer: VideoBuffer::new(max_buffer_seconds as usize * ONE_MICROS),
@@ -254,7 +254,7 @@ impl VaapiEncoder {
         unsafe {
             let frame = av_hwframe_ctx_alloc(device);
 
-            if frame == null_mut() {
+            if frame.is_null() {
                 return Err(anyhow!("Could not create vaapi frame context"));
             }
 
@@ -286,16 +286,16 @@ impl VaapiEncoder {
         opts.set("vsync", "vfr");
         opts.set("rc", "VBR");
         match config.quality {
-            QualityPreset::LOW => {
+            QualityPreset::Low => {
                 opts.set("qp", "25");
             }
-            QualityPreset::MEDIUM => {
+            QualityPreset::Medium => {
                 opts.set("qp", "18");
             }
-            QualityPreset::HIGH => {
+            QualityPreset::High => {
                 opts.set("qp", "10");
             }
-            QualityPreset::HIGHEST => {
+            QualityPreset::Ultra => {
                 opts.set("qp", "1");
             }
         }

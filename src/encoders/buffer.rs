@@ -175,7 +175,7 @@ impl AudioBuffer {
     /// # Arguments
     ///
     /// * `timestamp` - The presentation timestamp (PTS) of the frame according to the audio
-    /// encoder.
+    ///   encoder.
     /// * `frame` - A [`AudioFrameData`] representing an encoded frame.
     pub fn insert_frame(&mut self, timestamp: i64, frame: Vec<u8>) {
         self.frames.insert(timestamp, frame);

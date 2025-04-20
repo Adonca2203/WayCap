@@ -22,19 +22,14 @@ use crate::{RawVideoFrame, Terminate};
 pub struct VideoCapture;
 
 #[derive(Clone, Copy)]
+#[derive(Default)]
 struct UserData {
     video_format: spa::param::video::VideoInfoRaw,
 }
 
-impl Default for UserData {
-    fn default() -> Self {
-        Self {
-            video_format: Default::default(),
-        }
-    }
-}
 
 impl VideoCapture {
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         pipewire_fd: RawFd,
         stream_node: u32,

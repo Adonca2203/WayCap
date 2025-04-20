@@ -23,22 +23,15 @@ use ringbuf::{traits::Producer, HeapProd};
 
 use crate::{RawAudioFrame, Terminate};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct UserData {
     audio_format: spa::param::audio::AudioInfoRaw,
-}
-
-impl Default for UserData {
-    fn default() -> Self {
-        Self {
-            audio_format: Default::default(),
-        }
-    }
 }
 
 pub struct AudioCapture;
 
 impl AudioCapture {
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         stream_node: u32,
         mut ringbuf_producer: HeapProd<RawAudioFrame>,

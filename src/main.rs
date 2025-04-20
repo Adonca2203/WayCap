@@ -96,27 +96,26 @@ async fn main() -> Result<(), Error> {
         .await?;
 
     // Video
-    let video_encoder: Arc<Mutex<dyn VideoEncoder + Send>>;
-    match config.encoder {
+    let video_encoder: Arc<Mutex<dyn VideoEncoder + Send>> = match config.encoder {
         application_config::EncoderToUse::H264Nvenc => {
             let encoder_str = "h264_nvenc";
-            video_encoder = Arc::new(Mutex::new(NvencEncoder::new(
+            Arc::new(Mutex::new(NvencEncoder::new(
                 width,
                 height,
                 config.max_seconds,
                 encoder_str,
-            )?));
+            )?))
         }
         application_config::EncoderToUse::H264Vaapi => {
             let encoder_str = "h264_vaapi";
-            video_encoder = Arc::new(Mutex::new(VaapiEncoder::new(
+            Arc::new(Mutex::new(VaapiEncoder::new(
                 width,
                 height,
                 config.max_seconds,
                 encoder_str,
-            )?));
+            )?))
         }
-    }
+    };
 
     let video_encoder_clone = Arc::clone(&video_encoder);
     let video_ready = Arc::new(AtomicBool::new(false));
@@ -204,7 +203,7 @@ async fn main() -> Result<(), Error> {
     let saving_video_clone = Arc::clone(&saving);
     let pw_video_worker = std::thread::spawn(move || {
         debug!("Starting video stream");
-        let _video = VideoCapture::run(
+        VideoCapture::run(
             fd,
             stream_node,
             video_ring_sender,
@@ -221,7 +220,7 @@ async fn main() -> Result<(), Error> {
     let saving_audio_clone = Arc::clone(&saving);
     let pw_audio_worker = std::thread::spawn(move || {
         debug!("Starting audio stream");
-        let _audio = AudioCapture::run(
+        AudioCapture::run(
             stream_node,
             audio_ring_sender,
             vr_clone,
@@ -286,10 +285,6 @@ async fn main() -> Result<(), Error> {
                 );
                 video_lock.drain()?;
                 audio_lock.drain()?;
-
-                video_lock.drop_encoder();
-                audio_lock.drop_encoder();
-
                 break;
             }
         }
@@ -318,7 +313,7 @@ fn save_buffer(
 
     let mut video_stream = output.add_stream(video_codec)?;
     video_stream.set_time_base(video_encoder.time_base());
-    video_stream.set_parameters(&video_encoder);
+    video_stream.set_parameters(video_encoder);
 
     let audio_codec = audio_encoder
         .codec()
@@ -326,7 +321,7 @@ fn save_buffer(
 
     let mut audio_stream = output.add_stream(audio_codec)?;
     audio_stream.set_time_base(audio_encoder.time_base());
-    audio_stream.set_parameters(&audio_encoder);
+    audio_stream.set_parameters(audio_encoder);
 
     output.write_header()?;
 
@@ -349,7 +344,7 @@ fn save_buffer(
             continue;
         }
 
-        if first_offset == false {
+        if !first_offset {
             first_pts_offset = *frame_data.get_pts();
             first_offset = true;
         }
@@ -357,7 +352,7 @@ fn save_buffer(
         let pts_offset = frame_data.get_pts() - first_pts_offset;
         let dts_offset = dts - first_pts_offset;
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame_data.get_raw_bytes());
+        let mut packet = ffmpeg::codec::packet::Packet::copy(frame_data.get_raw_bytes());
         packet.set_pts(Some(pts_offset));
         packet.set_dts(Some(dts_offset));
 
@@ -377,7 +372,7 @@ fn save_buffer(
     let mut iter = 0;
     for (pts, frame) in audio_buffer.get_frames() {
         // Don't write any more audio if we would exceed video (clip to max video)
-        if &audio_capture_timestamps[iter] > &newest_video_pts {
+        if audio_capture_timestamps[iter] > newest_video_pts {
             debug!(
                 "Oldest capture time {:?}, in time scale: {:?}",
                 audio_capture_timestamps[iter], pts
@@ -387,7 +382,7 @@ fn save_buffer(
 
         // If audio starts before video try and catch up as much as possible
         // (At worst a 20ms gap)
-        if &audio_capture_timestamps[iter] < &first_pts_offset {
+        if audio_capture_timestamps[iter] < first_pts_offset {
             debug!(
                 "Would skip Audio Frame due to capture time being: {:?} while first video pts is: {:?} pts: {:?}",
                 &audio_capture_timestamps[iter],
@@ -397,7 +392,7 @@ fn save_buffer(
             continue;
         }
 
-        if first_offset == false {
+        if !first_offset {
             oldest_frame_offset = *pts;
             first_offset = true;
         }
@@ -409,7 +404,7 @@ fn save_buffer(
             audio_capture_timestamps[iter], offset
         );
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame);
+        let mut packet = ffmpeg::codec::packet::Packet::copy(frame);
         packet.set_pts(Some(offset));
         packet.set_dts(Some(offset));
 

@@ -124,7 +124,7 @@ impl NvencEncoder {
     ) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
         let config = load_or_create_config();
         let encoder_codec =
-            ffmpeg::codec::encoder::find_by_name(&encoder).ok_or(ffmpeg::Error::EncoderNotFound)?;
+            ffmpeg::codec::encoder::find_by_name(encoder).ok_or(ffmpeg::Error::EncoderNotFound)?;
 
         let mut encoder_ctx = ffmpeg::codec::context::Context::new_with_codec(encoder_codec)
             .encoder()
@@ -156,7 +156,7 @@ impl NvencEncoder {
         let mut opts = ffmpeg::Dictionary::new();
         match config.quality {
             // 1.5 GB file for a 5 minute recording
-            QualityPreset::LOW => {
+            QualityPreset::Low => {
                 opts.set("vsync", "vfr");
                 opts.set("rc", "vbr");
                 opts.set("preset", "p2");
@@ -164,7 +164,7 @@ impl NvencEncoder {
                 opts.set("cq", "25");
                 opts.set("b:v", "20M");
             }
-            QualityPreset::MEDIUM => {
+            QualityPreset::Medium => {
                 opts.set("vsync", "vfr");
                 opts.set("rc", "vbr");
                 opts.set("preset", "p4");
@@ -172,7 +172,7 @@ impl NvencEncoder {
                 opts.set("cq", "18");
                 opts.set("b:v", "40M");
             }
-            QualityPreset::HIGH => {
+            QualityPreset::High => {
                 opts.set("vsync", "vfr");
                 opts.set("rc", "vbr");
                 opts.set("preset", "p7");
@@ -180,7 +180,7 @@ impl NvencEncoder {
                 opts.set("cq", "10");
                 opts.set("b:v", "80M");
             }
-            QualityPreset::HIGHEST => {
+            QualityPreset::Ultra => {
                 opts.set("vsync", "vfr");
                 opts.set("rc", "vbr");
                 opts.set("preset", "p7");

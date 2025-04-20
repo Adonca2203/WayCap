@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum QualityPreset {
-    LOW,
-    MEDIUM,
-    HIGH,
-    HIGHEST,
+    Low,
+    Medium,
+    High,
+    Ultra,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
@@ -36,7 +36,7 @@ impl Default for AppConfig {
             encoder: EncoderToUse::H264Vaapi,
             max_seconds: 300,
             use_mic: false,
-            quality: QualityPreset::MEDIUM,
+            quality: QualityPreset::Medium,
         }
     }
 }
