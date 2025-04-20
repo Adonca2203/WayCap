@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   clippy:
@@ -22,5 +23,20 @@ jobs:
           profile: minimal
           override: true
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libavutil-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libswscale-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            pkg-config
+
       - name: Run cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
