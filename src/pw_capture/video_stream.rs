@@ -63,7 +63,7 @@ impl VideoCapture {
         // Set up video stream
         let video_stream = Stream::new(
             &core,
-            "auto-screen-recorder-video",
+            "waycap-video",
             properties! {
                 *pw::keys::MEDIA_TYPE => "Video",
                 *pw::keys::MEDIA_CATEGORY => "Capture",

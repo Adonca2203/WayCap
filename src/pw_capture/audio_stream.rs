@@ -65,7 +65,7 @@ impl AudioCapture {
         // Audio Stream
         let audio_stream = pw::stream::Stream::new(
             &audio_core,
-            "auto-screen-recorder-audio",
+            "waycap-audio",
             properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CATEGORY => "Capture",

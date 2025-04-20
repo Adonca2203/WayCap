@@ -7,7 +7,7 @@ runs in the background while you play and you can use a keybind to clip the last
 
 Currently it offers video and audio capture when ran and exports the capture into an mp4 file all using ffmpeg.
 
-Use `busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveClip` to invoke the save command.
+Use `busctl --user call com.rust.WayCap /com/rust/WayCap com.rust.WayCap SaveClip` to invoke the save command.
 
 # Core features
 - [x] Asks permission from user to record their screen (Wayland limitation).
@@ -30,7 +30,7 @@ By default this will try to use h264_vaapi as it can support AMD/Nvidia/Intel. I
 if you have an nvidia GPU by updating the configuration file.
 
 ### Configuration
-Currently, this program only supports configurations via a `config.toml` file in `~/.config/auto-screen-recorder/`
+Currently, this program only supports configurations via a `config.toml` file in `~/.config/waycap/`
 
 The application will automatically create a default one for you if it is not present. This is what it looks like
 ```toml
@@ -70,7 +70,7 @@ Play games and have fun
 
 Whenever you want to clip, open up another terminal and run
 ```
-busctl --user call com.rust.GameClip /com/rust/GameClip com.rust.GameClip SaveClip
+busctl --user call com.rust.WayCap /com/rust/WayCap com.rust.WayCap SaveClip
 ```
 
 Alternatively, bind the above busctl call to a keybind with something like [sxhkd](https://github.com/baskerville/sxhkd)

@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Error, Result};
-use application_config::load_or_create_config;
+use application_config::{load_or_create_config, update_config, AppConfig};
 use encoders::{
     audio_encoder::AudioEncoder,
     buffer::{AudioBuffer, VideoBuffer},
@@ -85,13 +85,15 @@ async fn main() -> Result<(), Error> {
     let stream_node = stream.pipewire_node();
     let (width, height) = stream.size();
 
-    let (save_tx, mut save_rx) = mpsc::channel(1);
-    let clip_service = dbus::ClipService::new(save_tx);
+    let (dbus_save_tx, mut dbus_save_rx) = mpsc::channel(1);
+    let (dbus_config_tx, mut dbus_config_rx): (mpsc::Sender<AppConfig>, mpsc::Receiver<AppConfig>) =
+        mpsc::channel(1);
+    let clip_service = dbus::ClipService::new(dbus_save_tx, dbus_config_tx);
 
     debug!("Creating dbus connection");
     let _connection = connection::Builder::session()?
-        .name("com.rust.GameClip")?
-        .serve_at("/com/rust/GameClip", clip_service)?
+        .name("com.rust.WayCap")?
+        .serve_at("/com/rust/WayCap", clip_service)?
         .build()
         .await?;
 
@@ -236,7 +238,7 @@ async fn main() -> Result<(), Error> {
     // Main event loop
     loop {
         tokio::select! {
-            _ = save_rx.recv() => {
+            _ = dbus_save_rx.recv() => {
                 // Stop capturing video and audio while we save by taking out the locks
                 saving.store(true, std::sync::atomic::Ordering::Release);
                 let (mut video_lock, mut audio_lock) = tokio::join!(
@@ -271,6 +273,9 @@ async fn main() -> Result<(), Error> {
                 saving.store(false, std::sync::atomic::Ordering::Release);
                 debug!("Done saving!");
 
+            },
+            Some(new_config) = dbus_config_rx.recv() => {
+                update_config(new_config);
             },
             _ = tokio::signal::ctrl_c() => {
                 println!("\n");
