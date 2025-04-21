@@ -62,7 +62,7 @@ git clone https://github.com/Adonca2203/WayCap.git
 ```
 Build the project (debug build) via
 ```
-cd screen-recorder
+cd WayCap
 cargo build
 ```
 
