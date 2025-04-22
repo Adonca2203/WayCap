@@ -21,12 +21,10 @@ use crate::{RawVideoFrame, Terminate};
 
 pub struct VideoCapture;
 
-#[derive(Clone, Copy)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct UserData {
     video_format: spa::param::video::VideoInfoRaw,
 }
-
 
 impl VideoCapture {
     #[allow(clippy::too_many_arguments)]
@@ -146,11 +144,17 @@ impl VideoCapture {
                         // send frame data to encoder
                         let data = &mut datas[0];
                         if let Some(frame) = data.data() {
-                            if let Err(frame) = ringbuf_producer.try_push(RawVideoFrame {
-                                bytes: frame.to_vec(),
-                                timestamp: time_us,
-                            }) {
-                                error!("Error sending video frame: {:?}. Ring buf full?", frame);
+                            if ringbuf_producer
+                                .try_push(RawVideoFrame {
+                                    bytes: frame.to_vec(),
+                                    timestamp: time_us,
+                                })
+                                .is_err()
+                            {
+                                error!(
+                                    "Error sending video frame at: {:?}. Ring buf full?",
+                                    time_us
+                                );
                             }
                         }
                     }
