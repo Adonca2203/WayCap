@@ -226,8 +226,6 @@ async fn main() -> Result<(), Error> {
                 video_lock.reset()?;
                 audio_lock.reset_encoder()?;
 
-                drop(video_lock);
-                drop(audio_lock);
                 saving.store(false, std::sync::atomic::Ordering::Release);
                 debug!("Done saving!");
 
@@ -303,7 +301,11 @@ fn save_buffer(
         // If video starts before audio try and catch up as much as possible
         // (At worst a 20ms gap)
         if &audio_capture_timestamps[0] > frame_data.get_pts() && !*frame_data.is_key() {
-            debug!("Skipping Video Frame: {:?}, DTS: {:?}", frame_data, dts,);
+            debug!(
+                "Skipping Video Frame Captured at: {:?}, DTS: {:?}",
+                frame_data.get_pts(),
+                dts,
+            );
             continue;
         }
 
@@ -347,11 +349,12 @@ fn save_buffer(
         // (At worst a 20ms gap)
         if audio_capture_timestamps[iter] < first_pts_offset {
             debug!(
-                "Would skip Audio Frame due to capture time being: {:?} while first video pts is: {:?} pts: {:?}",
+                "Skipping Audio Frame due to capture time being: {:?} while first video pts is: {:?} pts: {:?}",
                 &audio_capture_timestamps[iter],
                 &first_pts_offset,
                 pts
             );
+            iter += 1;
             continue;
         }
 
