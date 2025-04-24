@@ -1,4 +1,4 @@
-name: Clippy Check
+name: Clippy & Test Check
 
 on:
   pull_request:
@@ -7,13 +7,44 @@ on:
   workflow_dispatch:
 
 jobs:
-  clippy:
-    name: Run Clippy
+  setup:
+    name: Shared Setup (Caching)
     runs-on: ubuntu-latest
-
+    outputs:
+      cache-hit: ${{ steps.cache.outputs.cache-hit }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Cache cargo registry and target dir
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+  clippy:
+    name: Run Clippy
+    runs-on: ubuntu-latest
+    needs: setup
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -39,6 +70,45 @@ jobs:
 
       - name: Run cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: setup
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libavutil-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libswscale-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            pkg-config
 
       - name: Run tests
         run: cargo test
