@@ -11,11 +11,11 @@ pub struct VideoFrameData {
 }
 
 impl VideoFrameData {
-    pub fn new(frame_bytes: Vec<u8>, is_key: bool, dts: i64) -> Self {
+    pub fn new(frame_bytes: Vec<u8>, is_key: bool, pts: i64) -> Self {
         Self {
             frame_bytes,
             is_key,
-            pts: dts,
+            pts,
         }
     }
 
