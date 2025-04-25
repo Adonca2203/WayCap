@@ -45,7 +45,6 @@ impl AudioEncoder {
             Self::boost_with_rms(raw_frame.get_samples_mut())?;
             self.leftover_data.extend(raw_frame.get_samples());
 
-            self.audio_buffer.insert_capture_time(raw_frame.timestamp);
             // Send chunked frames to encoder
             while self.leftover_data.len() >= frame_size {
                 let frame_samples: Vec<f32> = self.leftover_data.drain(..frame_size).collect();
@@ -60,6 +59,7 @@ impl AudioEncoder {
                 frame.set_pts(Some(self.next_pts));
                 frame.set_rate(encoder.rate());
 
+                self.audio_buffer.insert_capture_time(raw_frame.timestamp);
                 encoder.send_frame(&frame)?;
 
                 // Try and get a frame back from encoder
