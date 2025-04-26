@@ -20,7 +20,7 @@ use std::{
 use anyhow::{Context, Error, Result};
 use application_config::{load_or_create_config, update_config, AppConfig};
 use encoders::{
-    audio_encoder::AudioEncoder,
+    audio_encoder::{AudioEncoder, AudioEncoderImpl, FfmpegAudioEncoder},
     buffer::{AudioBuffer, VideoBuffer},
     nvenc_encoder::NvencEncoder,
     vaapi_encoder::VaapiEncoder,
@@ -135,7 +135,10 @@ async fn main() -> Result<(), Error> {
     let (video_ring_sender, video_ring_receiver) = video_ring_buffer.split();
 
     // Audio
-    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new(config.max_seconds)?));
+    let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new_with_factory(
+        FfmpegAudioEncoder::new_opus,
+        config.max_seconds,
+    )?));
     let audio_encoder_clone = Arc::clone(&audio_encoder);
     let audio_ready = Arc::new(AtomicBool::new(false));
     let audio_ring_buffer = HeapRb::<RawAudioFrame>::new(10);
@@ -224,7 +227,7 @@ async fn main() -> Result<(), Error> {
                 save_buffer(&filename, video_buffer, video_encoder, audio_buffer, audio_encoder)?;
 
                 video_lock.reset()?;
-                audio_lock.reset_encoder()?;
+                audio_lock.reset_encoder(FfmpegAudioEncoder::new_opus)?;
 
                 saving.store(false, std::sync::atomic::Ordering::Release);
                 debug!("Done saving!");
@@ -264,8 +267,9 @@ fn save_buffer(
     video_buffer: &VideoBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
     audio_buffer: &AudioBuffer,
-    audio_encoder: &ffmpeg::codec::encoder::Audio,
-) -> Result<()> {
+    audio_encoder: &FfmpegAudioEncoder,
+) -> Result<()>
+{
     let mut output = ffmpeg::format::output(&filename)?;
 
     let video_codec = video_encoder
@@ -282,7 +286,7 @@ fn save_buffer(
 
     let mut audio_stream = output.add_stream(audio_codec)?;
     audio_stream.set_time_base(audio_encoder.time_base());
-    audio_stream.set_parameters(audio_encoder);
+    audio_stream.set_parameters(audio_encoder.as_ref());
 
     output.write_header()?;
 
@@ -388,10 +392,11 @@ fn save_buffer(
 
     Ok(())
 }
+
 fn create_audio_worker(
     stop_audio: Arc<AtomicBool>,
     mut audio_receiver: HeapCons<RawAudioFrame>,
-    audio_encoder: Arc<Mutex<AudioEncoder>>,
+    audio_encoder: Arc<Mutex<AudioEncoder<FfmpegAudioEncoder>>>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || loop {
         if stop_audio.load(std::sync::atomic::Ordering::Acquire) {
