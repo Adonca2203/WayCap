@@ -154,38 +154,28 @@ impl NvencEncoder {
 
     fn get_encoder_params(config: &AppConfig) -> ffmpeg::Dictionary {
         let mut opts = ffmpeg::Dictionary::new();
+        opts.set("vsync", "vfr");
+        opts.set("rc", "vbr");
+        opts.set("tune", "hq");
         match config.quality {
-            // 1.5 GB file for a 5 minute recording
             QualityPreset::Low => {
-                opts.set("vsync", "vfr");
-                opts.set("rc", "vbr");
                 opts.set("preset", "p2");
-                opts.set("tune", "hq");
-                opts.set("cq", "25");
+                opts.set("cq", "30");
                 opts.set("b:v", "20M");
             }
             QualityPreset::Medium => {
-                opts.set("vsync", "vfr");
-                opts.set("rc", "vbr");
                 opts.set("preset", "p4");
-                opts.set("tune", "hq");
-                opts.set("cq", "18");
+                opts.set("cq", "25");
                 opts.set("b:v", "40M");
             }
             QualityPreset::High => {
-                opts.set("vsync", "vfr");
-                opts.set("rc", "vbr");
                 opts.set("preset", "p7");
-                opts.set("tune", "hq");
-                opts.set("cq", "10");
+                opts.set("cq", "20");
                 opts.set("b:v", "80M");
             }
             QualityPreset::Ultra => {
-                opts.set("vsync", "vfr");
-                opts.set("rc", "vbr");
                 opts.set("preset", "p7");
-                opts.set("tune", "hq");
-                opts.set("cq", "1");
+                opts.set("cq", "15");
                 opts.set("b:v", "120M");
             }
         }

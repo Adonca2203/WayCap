@@ -16,10 +16,14 @@ use pw::{properties::properties, spa};
 
 use ringbuf::{traits::Producer, HeapProd};
 use spa::pod::Pod;
+use tokio::sync::mpsc;
 
 use crate::{RawVideoFrame, Terminate};
 
-pub struct VideoCapture;
+pub struct VideoCapture {
+    video_ready: Arc<AtomicBool>,
+    audio_ready: Arc<AtomicBool>,
+}
 
 #[derive(Clone, Copy, Default)]
 struct UserData {
@@ -27,16 +31,23 @@ struct UserData {
 }
 
 impl VideoCapture {
+    pub fn new(video_ready: Arc<AtomicBool>, audio_ready: Arc<AtomicBool>) -> Self {
+        Self {
+            video_ready,
+            audio_ready,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn run(
+        &self,
         pipewire_fd: RawFd,
         stream_node: u32,
         mut ringbuf_producer: HeapProd<RawVideoFrame>,
-        video_ready: Arc<AtomicBool>,
-        audio_ready: Arc<AtomicBool>,
-        start_time: SystemTime,
         termination_recv: pw::channel::Receiver<Terminate>,
         saving: Arc<AtomicBool>,
+        start_time: SystemTime,
+        resolution_negotiation_channel: mpsc::Sender<(u32, u32)>,
     ) -> Result<(), pipewire::Error> {
         let pw_loop = MainLoop::new(None)?;
         let terminate_loop = pw_loop.clone();
@@ -69,16 +80,18 @@ impl VideoCapture {
             },
         )?;
 
+        let ready_clone = Arc::clone(&self.video_ready);
+        let audio_ready_clone = Arc::clone(&self.audio_ready);
         let _video_stream = video_stream
             .add_local_listener_with_user_data(data)
             .state_changed(move |_, _, old, new| {
                 debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
-                video_ready.store(
+                ready_clone.store(
                     new == StreamState::Streaming,
                     std::sync::atomic::Ordering::Release,
                 );
             })
-            .param_changed(|_, user_data, id, param| {
+            .param_changed(move |_, user_data, id, param| {
                 let Some(param) = param else {
                     return;
                 };
@@ -108,6 +121,12 @@ impl VideoCapture {
                     user_data.video_format.format().as_raw(),
                     user_data.video_format.format()
                 );
+
+                resolution_negotiation_channel.blocking_send((
+                    user_data.video_format.size().width,
+                    user_data.video_format.size().height,
+                )).unwrap();
+
                 debug!(
                     "  size: {}x{}",
                     user_data.video_format.size().width,
@@ -124,7 +143,7 @@ impl VideoCapture {
                     None => debug!("out of buffers"),
                     Some(mut buffer) => {
                         // Wait until audio is streaming before we try to process
-                        if !audio_ready.load(std::sync::atomic::Ordering::Acquire)
+                        if !audio_ready_clone.load(std::sync::atomic::Ordering::Acquire)
                             || saving.load(std::sync::atomic::Ordering::Acquire)
                         {
                             return;
