@@ -287,16 +287,16 @@ impl VaapiEncoder {
         opts.set("rc", "VBR");
         match config.quality {
             QualityPreset::Low => {
-                opts.set("qp", "25");
+                opts.set("qp", "30");
             }
             QualityPreset::Medium => {
-                opts.set("qp", "18");
+                opts.set("qp", "25");
             }
             QualityPreset::High => {
-                opts.set("qp", "10");
+                opts.set("qp", "20");
             }
             QualityPreset::Ultra => {
-                opts.set("qp", "1");
+                opts.set("qp", "15");
             }
         }
         opts

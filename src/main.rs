@@ -10,11 +10,12 @@ mod application_config;
 mod dbus;
 mod encoders;
 mod pw_capture;
+mod shadow_application;
 
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, mpsc::TryRecvError, Arc},
     thread::JoinHandle,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context, Error, Result};
@@ -79,22 +80,78 @@ pub struct Terminate;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Initialization
+    // TODO: Create an App struct that handles stuff like this?
+    // Main is super cluttered
+    let current_time = SystemTime::now();
+    let saving = Arc::new(AtomicBool::new(false));
+
     let _ = simple_logging::log_to_file("logs.txt", LevelFilter::Debug);
 
     let config = load_or_create_config();
     debug!("CONFIG: {:?}", config);
 
     let mut screen_cast = ScreenCast::new()?;
-    screen_cast.set_source_types(SourceType::MONITOR);
+    screen_cast.set_source_types(SourceType::all());
     screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
     let screen_cast = screen_cast.start(None)?;
 
     let fd = screen_cast.pipewire_fd();
     let stream = screen_cast.streams().next().unwrap();
     let stream_node = stream.pipewire_node();
-    let (width, height) = stream.size();
+    let (mut width, mut height) = stream.size();
+
+    let video_ready = Arc::new(AtomicBool::new(false));
+    let audio_ready = Arc::new(AtomicBool::new(false));
+    let vr_clone = Arc::clone(&video_ready);
+    let video_ring_buffer = HeapRb::<RawVideoFrame>::new(500);
+    let (video_ring_sender, video_ring_receiver) = video_ring_buffer.split();
+
+    let audio_ring_buffer = HeapRb::<RawAudioFrame>::new(10);
+    let (audio_ring_sender, audio_ring_receiver) = audio_ring_buffer.split();
+    let ar_clone = Arc::clone(&audio_ready);
+
+    let (pw_video_sender, pw_video_recv) = pw::channel::channel::<Terminate>();
+    let saving_video_clone = Arc::clone(&saving);
+    let (resolution_sender, mut resolution_receiver) = mpsc::channel::<(u32, u32)>(2);
+    let pw_video_worker = std::thread::spawn(move || {
+        debug!("Starting video stream");
+        let video_cap = VideoCapture::new(video_ready, audio_ready);
+        video_cap
+            .run(
+                fd,
+                stream_node,
+                video_ring_sender,
+                pw_video_recv,
+                saving_video_clone,
+                current_time,
+                resolution_sender,
+            )
+            .unwrap();
+    });
+
+    // Window mode return (0, 0) for dimensions to we have to get it from pipewire
+    if (width, height) == (0, 0) {
+        // Wait to get back a negotiated resolution from pipewire
+        let timeout = Duration::from_secs(5);
+        let start = Instant::now();
+        loop {
+            if let Ok((recv_width, recv_height)) = resolution_receiver.try_recv() {
+                (width, height) = (recv_width, recv_height);
+                break;
+            }
+
+            if start.elapsed() > timeout {
+                error!("Timeout waiting for PipeWire negotiated resolution.");
+                std::process::exit(1);
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     let (dbus_save_tx, mut dbus_save_rx) = mpsc::channel(1);
+
     let (dbus_config_tx, mut dbus_config_rx): (mpsc::Sender<AppConfig>, mpsc::Receiver<AppConfig>) =
         mpsc::channel(1);
     let clip_service = dbus::ClipService::new(dbus_save_tx, dbus_config_tx);
@@ -128,27 +185,15 @@ async fn main() -> Result<(), Error> {
         }
     };
 
-    let video_encoder_clone = Arc::clone(&video_encoder);
-    let video_ready = Arc::new(AtomicBool::new(false));
-    let vr_clone = Arc::clone(&video_ready);
-    let video_ring_buffer = HeapRb::<RawVideoFrame>::new(500);
-    let (video_ring_sender, video_ring_receiver) = video_ring_buffer.split();
-
     // Audio
     let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new_with_factory(
         FfmpegAudioEncoder::new_opus,
         config.max_seconds,
     )?));
     let audio_encoder_clone = Arc::clone(&audio_encoder);
-    let audio_ready = Arc::new(AtomicBool::new(false));
-    let audio_ring_buffer = HeapRb::<RawAudioFrame>::new(10);
-    let (audio_ring_sender, audio_ring_receiver) = audio_ring_buffer.split();
-    let ar_clone = Arc::clone(&audio_ready);
 
     pw::init();
     ffmpeg::init()?;
-
-    let current_time = SystemTime::now();
 
     // Create audio worker thread
     let stop = Arc::new(AtomicBool::new(false));
@@ -157,27 +202,10 @@ async fn main() -> Result<(), Error> {
         create_audio_worker(stop_audio_clone, audio_ring_receiver, audio_encoder_clone);
 
     // Create video worker
+    let video_encoder_clone = Arc::clone(&video_encoder);
     let stop_video_clone = Arc::clone(&stop);
     let video_worker =
         create_video_worker(stop_video_clone, video_ring_receiver, video_encoder_clone);
-    let saving = Arc::new(AtomicBool::new(false));
-
-    let (pw_video_sender, pw_video_recv) = pw::channel::channel::<Terminate>();
-    let saving_video_clone = Arc::clone(&saving);
-    let pw_video_worker = std::thread::spawn(move || {
-        debug!("Starting video stream");
-        VideoCapture::run(
-            fd,
-            stream_node,
-            video_ring_sender,
-            video_ready,
-            audio_ready,
-            current_time,
-            pw_video_recv,
-            saving_video_clone,
-        )
-        .unwrap();
-    });
 
     let (pw_audio_sender, pw_audio_recv) = pw::channel::channel::<Terminate>();
     let saving_audio_clone = Arc::clone(&saving);
@@ -268,8 +296,7 @@ fn save_buffer(
     video_encoder: &ffmpeg::codec::encoder::Video,
     audio_buffer: &AudioBuffer,
     audio_encoder: &FfmpegAudioEncoder,
-) -> Result<()>
-{
+) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
 
     let video_codec = video_encoder
