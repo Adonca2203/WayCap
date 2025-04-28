@@ -13,7 +13,7 @@ mod pw_capture;
 mod shadow_application;
 
 use std::{
-    sync::{atomic::AtomicBool, mpsc::TryRecvError, Arc},
+    sync::{atomic::AtomicBool, Arc},
     thread::JoinHandle,
     time::{Duration, Instant, SystemTime},
 };
