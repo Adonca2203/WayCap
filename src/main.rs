@@ -10,7 +10,6 @@ mod application_config;
 mod dbus;
 mod encoders;
 mod pw_capture;
-mod shadow_application;
 
 use std::{
     sync::{atomic::AtomicBool, Arc},
