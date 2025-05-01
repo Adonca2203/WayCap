@@ -116,7 +116,7 @@ impl AsRef<ffmpeg::codec::encoder::Audio> for FfmpegAudioEncoder {
 
 pub struct AudioEncoder<E>
 where
-    E: AudioEncoderImpl,
+    E: AudioEncoderImpl<Error = ffmpeg::Error>,
 {
     encoder: Option<E>,
     audio_buffer: AudioBuffer,
@@ -128,7 +128,7 @@ impl<E> AudioEncoder<E>
 where
     E: AudioEncoderImpl<Error = ffmpeg::Error>,
 {
-    pub fn new_with_factory(
+    pub fn new_with_encoder(
         factory: impl Fn() -> Result<E, ffmpeg::Error>,
         max_seconds: u32,
     ) -> Result<Self, ffmpeg::Error> {
@@ -250,5 +250,18 @@ where
             *sample *= gain;
         }
         Ok(())
+    }
+}
+
+impl<E> Drop for AudioEncoder<E>
+where
+    E: AudioEncoderImpl<Error = ffmpeg::Error>,
+{
+    fn drop(&mut self) {
+        if let Err(e) = self.drain() {
+            log::error!("Error draining the audio encoder when dropping: {:?}", e);
+        }
+
+        self.drop_encoder();
     }
 }
