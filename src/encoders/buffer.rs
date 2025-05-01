@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 
-use log::warn;
-
 /// Represents a single encoded video frame
 #[derive(Clone, Debug)]
 pub struct VideoFrameData {
@@ -119,7 +117,7 @@ impl VideoBuffer {
     /// Does nothing if there is only one or no key frame recorded.
     fn trim_oldest_gop(&mut self) {
         if self.key_frame_keys.len() <= 1 {
-            warn!("Tried to remove oldest GOP without enough keyframes to determine the range. Is the max time too low?");
+            log::warn!("Tried to remove oldest GOP without enough keyframes to determine the range. Is the max time too low?");
             return;
         }
 

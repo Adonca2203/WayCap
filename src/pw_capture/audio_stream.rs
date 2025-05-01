@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::Result;
-use log::{debug, error, info};
 use pipewire::{
     self as pw,
     context::Context,
@@ -28,16 +27,22 @@ struct UserData {
     audio_format: spa::param::audio::AudioInfoRaw,
 }
 
-pub struct AudioCapture;
+pub struct AudioCapture {
+    video_ready: Arc<AtomicBool>,
+    audio_ready: Arc<AtomicBool>,
+}
 
 impl AudioCapture {
-    #[allow(clippy::too_many_arguments)]
+    pub fn new(video_ready: Arc<AtomicBool>, audio_ready: Arc<AtomicBool>) -> Self {
+        Self {
+            video_ready,
+            audio_ready,
+        }
+    }
+
     pub fn run(
-        stream_node: u32,
+        &self,
         mut ringbuf_producer: HeapProd<RawAudioFrame>,
-        video_ready: Arc<AtomicBool>,
-        audio_ready: Arc<AtomicBool>,
-        use_mic: bool,
         start_time: SystemTime,
         termination_recv: pw::channel::Receiver<Terminate>,
         saving: Arc<AtomicBool>,
@@ -46,7 +51,7 @@ impl AudioCapture {
         let terminate_loop = pw_loop.clone();
 
         let _recv = termination_recv.attach(pw_loop.loop_(), move |_| {
-            debug!("Terminating audio capture loop");
+            log::debug!("Terminating audio capture loop");
             terminate_loop.quit();
         });
 
@@ -55,9 +60,9 @@ impl AudioCapture {
 
         let _audio_core_listener = audio_core
             .add_listener_local()
-            .info(|i| info!("AUDIO CORE:\n{0:#?}", i))
-            .error(|e, f, g, h| error!("{0},{1},{2},{3}", e, f, g, h))
-            .done(|d, _| info!("DONE: {0}", d))
+            .info(|i| log::info!("AUDIO CORE:\n{0:#?}", i))
+            .error(|e, f, g, h| log::error!("{0},{1},{2},{3}", e, f, g, h))
+            .done(|d, _| log::info!("DONE: {0}", d))
             .register();
 
         let data = UserData::default();
@@ -74,11 +79,13 @@ impl AudioCapture {
             },
         )?;
 
+        let video_ready_clone = Arc::clone(&self.video_ready);
+        let audio_ready_clone = Arc::clone(&self.audio_ready);
         let _audio_stream_shared_data_listener = audio_stream
             .add_local_listener_with_user_data(data)
             .state_changed(move |_, _, old, new| {
-                debug!("Audio Stream State Changed: {0:?} -> {1:?}", old, new);
-                audio_ready.store(
+                log::debug!("Audio Stream State Changed: {0:?} -> {1:?}", old, new);
+                audio_ready_clone.store(
                     new == StreamState::Streaming,
                     std::sync::atomic::Ordering::Release,
                 );
@@ -107,7 +114,7 @@ impl AudioCapture {
                     .parse(param)
                     .expect("Failed to parse audio params");
 
-                debug!(
+                log::debug!(
                     "Capturing Rate:{} channels:{}, format: {}",
                     udata.audio_format.rate(),
                     udata.audio_format.channels(),
@@ -115,10 +122,10 @@ impl AudioCapture {
                 );
             })
             .process(move |stream, _| match stream.dequeue_buffer() {
-                None => debug!("Out of audio buffers"),
+                None => log::debug!("Out of audio buffers"),
                 Some(mut buffer) => {
                     // Wait until video is streaming before we try to process
-                    if !video_ready.load(std::sync::atomic::Ordering::Acquire)
+                    if !video_ready_clone.load(std::sync::atomic::Ordering::Acquire)
                         || saving.load(std::sync::atomic::Ordering::Acquire)
                     {
                         return;
@@ -145,7 +152,7 @@ impl AudioCapture {
                             samples: audio_samples.to_vec(),
                             timestamp: time_us,
                         }) {
-                            error!(
+                            log::error!(
                                 "Could not add audio frame: {:?}. Is the buffer full?",
                                 frame
                             );
@@ -185,13 +192,9 @@ impl AudioCapture {
 
         let mut audio_params = [Pod::from_bytes(&audio_spa_values).unwrap()];
 
-        let sink_id_to_use = if !use_mic {
-            get_default_sink_node_id()
-        } else {
-            Some(stream_node)
-        };
+        let sink_id_to_use = get_default_sink_node_id();
 
-        debug!("Default sink id: {:?}", sink_id_to_use);
+        log::debug!("Default sink id: {:?}", sink_id_to_use);
         audio_stream.connect(
             Direction::Input,
             sink_id_to_use,
@@ -199,13 +202,14 @@ impl AudioCapture {
             &mut audio_params,
         )?;
 
-        debug!("Audio Stream: {:?}", audio_stream);
+        log::debug!("Audio Stream: {:?}", audio_stream);
 
         pw_loop.run();
         Ok(())
     }
 }
 
+// Theres gotta be a less goofy way to do this
 fn get_default_sink_node_id() -> Option<u32> {
     let output = Command::new("sh")
         .arg("-c")

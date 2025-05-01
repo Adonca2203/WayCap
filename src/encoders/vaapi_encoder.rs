@@ -32,15 +32,11 @@ pub struct VaapiEncoder {
 }
 
 impl VideoEncoder for VaapiEncoder {
-    fn new(
-        width: u32,
-        height: u32,
-        max_buffer_seconds: u32,
-        encoder_name: &str,
-    ) -> anyhow::Result<Self>
+    fn new(width: u32, height: u32, max_buffer_seconds: u32) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
+        let encoder_name = "h264_vaapi";
         let encoder = Self::create_encoder(width, height, encoder_name)?;
         Ok(Self {
             encoder: Some(encoder),
