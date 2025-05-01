@@ -1,4 +1,3 @@
-use log::debug;
 use tokio::sync::mpsc;
 use zbus::interface;
 
@@ -23,8 +22,8 @@ impl ClipService {
 #[interface(name = "com.rust.WayCap")]
 impl GameClip for ClipService {
     async fn save_clip(&self) {
+        log::debug!("Save clip received!");
         let _ = self.save_tx.send(()).await;
-        debug!("Save clip received!");
     }
 
     async fn update_config(&self, new_config: AppConfigDbus) -> zbus::fdo::Result<()> {

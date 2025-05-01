@@ -4,7 +4,6 @@ use std::{
     time::SystemTime,
 };
 
-use log::{debug, error, info};
 use pipewire::{
     self as pw,
     context::Context,
@@ -53,7 +52,7 @@ impl VideoCapture {
         let terminate_loop = pw_loop.clone();
 
         let _recv = termination_recv.attach(pw_loop.loop_(), move |_| {
-            debug!("Terminating video capture loop");
+            log::debug!("Terminating video capture loop");
             terminate_loop.quit();
         });
 
@@ -64,9 +63,9 @@ impl VideoCapture {
 
         let _listener = core
             .add_listener_local()
-            .info(|i| info!("VIDEO CORE:\n{0:#?}", i))
-            .error(|e, f, g, h| error!("{0},{1},{2},{3}", e, f, g, h))
-            .done(|d, _| info!("DONE: {0}", d))
+            .info(|i| log::info!("VIDEO CORE:\n{0:#?}", i))
+            .error(|e, f, g, h| log::error!("{0},{1},{2},{3}", e, f, g, h))
+            .done(|d, _| log::info!("DONE: {0}", d))
             .register();
 
         // Set up video stream
@@ -85,7 +84,7 @@ impl VideoCapture {
         let _video_stream = video_stream
             .add_local_listener_with_user_data(data)
             .state_changed(move |_, _, old, new| {
-                debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
+                log::debug!("Video Stream State Changed: {0:?} -> {1:?}", old, new);
                 ready_clone.store(
                     new == StreamState::Streaming,
                     std::sync::atomic::Ordering::Release,
@@ -116,23 +115,25 @@ impl VideoCapture {
                     .parse(param)
                     .expect("Failed to parse param");
 
-                debug!(
+                log::debug!(
                     "  format: {} ({:?})",
                     user_data.video_format.format().as_raw(),
                     user_data.video_format.format()
                 );
 
-                resolution_negotiation_channel.blocking_send((
-                    user_data.video_format.size().width,
-                    user_data.video_format.size().height,
-                )).unwrap();
+                resolution_negotiation_channel
+                    .blocking_send((
+                        user_data.video_format.size().width,
+                        user_data.video_format.size().height,
+                    ))
+                    .unwrap();
 
-                debug!(
+                log::debug!(
                     "  size: {}x{}",
                     user_data.video_format.size().width,
                     user_data.video_format.size().height
                 );
-                debug!(
+                log::debug!(
                     "  framerate: {}/{}",
                     user_data.video_format.framerate().num,
                     user_data.video_format.framerate().denom
@@ -140,7 +141,7 @@ impl VideoCapture {
             })
             .process(move |stream, _| {
                 match stream.dequeue_buffer() {
-                    None => debug!("out of buffers"),
+                    None => log::debug!("out of buffers"),
                     Some(mut buffer) => {
                         // Wait until audio is streaming before we try to process
                         if !audio_ready_clone.load(std::sync::atomic::Ordering::Acquire)
@@ -170,7 +171,7 @@ impl VideoCapture {
                                 })
                                 .is_err()
                             {
-                                error!(
+                                log::error!(
                                     "Error sending video frame at: {:?}. Ring buf full?",
                                     time_us
                                 );
@@ -253,7 +254,7 @@ impl VideoCapture {
             &mut video_params,
         )?;
 
-        debug!("Video Stream: {0:?}", video_stream);
+        log::debug!("Video Stream: {0:?}", video_stream);
 
         pw_loop.run();
         Ok(())
