@@ -1,9 +1,6 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
 
-use crate::{
-    application_config::{load_or_create_config, AppConfig, QualityPreset},
-    RawVideoFrame,
-};
+use crate::{application_config::QualityPreset, RawVideoFrame};
 
 use super::{
     buffer::{VideoBuffer, VideoFrameData},
@@ -16,15 +13,21 @@ pub struct NvencEncoder {
     width: u32,
     height: u32,
     encoder_name: String,
+    quality: QualityPreset,
 }
 
 impl VideoEncoder for NvencEncoder {
-    fn new(width: u32, height: u32, max_buffer_seconds: u32) -> anyhow::Result<Self>
+    fn new(
+        width: u32,
+        height: u32,
+        max_buffer_seconds: u32,
+        quality: QualityPreset,
+    ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
         let encoder_name = "h264_nvenc";
-        let encoder = Some(Self::create_encoder(width, height, encoder_name)?);
+        let encoder = Some(Self::create_encoder(width, height, encoder_name, &quality)?);
         let max_time = max_buffer_seconds as usize * ONE_MICROS;
 
         Ok(Self {
@@ -33,6 +36,7 @@ impl VideoEncoder for NvencEncoder {
             width,
             height,
             encoder_name: encoder_name.to_string(),
+            quality,
         })
     }
 
@@ -99,6 +103,7 @@ impl VideoEncoder for NvencEncoder {
             self.width,
             self.height,
             &self.encoder_name,
+            &self.quality,
         )?);
         Ok(())
     }
@@ -117,8 +122,8 @@ impl NvencEncoder {
         width: u32,
         height: u32,
         encoder: &str,
+        quality: &QualityPreset,
     ) -> Result<ffmpeg::codec::encoder::Video, ffmpeg::Error> {
-        let config = load_or_create_config();
         let encoder_codec =
             ffmpeg::codec::encoder::find_by_name(encoder).ok_or(ffmpeg::Error::EncoderNotFound)?;
 
@@ -140,7 +145,7 @@ impl NvencEncoder {
 
         let encoder_params = ffmpeg::codec::Parameters::new();
 
-        let opts = Self::get_encoder_params(&config);
+        let opts = Self::get_encoder_params(quality);
 
         encoder_ctx.set_parameters(encoder_params)?;
         let encoder = encoder_ctx.open_with(opts)?;
@@ -148,12 +153,12 @@ impl NvencEncoder {
         Ok(encoder)
     }
 
-    fn get_encoder_params(config: &AppConfig) -> ffmpeg::Dictionary {
+    fn get_encoder_params(quality: &QualityPreset) -> ffmpeg::Dictionary {
         let mut opts = ffmpeg::Dictionary::new();
         opts.set("vsync", "vfr");
         opts.set("rc", "vbr");
         opts.set("tune", "hq");
-        match config.quality {
+        match quality {
             QualityPreset::Low => {
                 opts.set("preset", "p2");
                 opts.set("cq", "30");

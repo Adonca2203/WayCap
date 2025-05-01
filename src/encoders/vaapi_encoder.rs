@@ -1,6 +1,6 @@
 use std::{cell::RefCell, ffi::CString, ptr::null_mut};
 
-use crate::application_config::{load_or_create_config, AppConfig, QualityPreset};
+use crate::application_config::QualityPreset;
 use anyhow::anyhow;
 use ffmpeg_next::{
     self as ffmpeg,
@@ -29,21 +29,28 @@ pub struct VaapiEncoder {
     width: u32,
     height: u32,
     encoder_name: String,
+    quality: QualityPreset,
 }
 
 impl VideoEncoder for VaapiEncoder {
-    fn new(width: u32, height: u32, max_buffer_seconds: u32) -> anyhow::Result<Self>
+    fn new(
+        width: u32,
+        height: u32,
+        max_buffer_seconds: u32,
+        quality: QualityPreset,
+    ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
         let encoder_name = "h264_vaapi";
-        let encoder = Self::create_encoder(width, height, encoder_name)?;
+        let encoder = Self::create_encoder(width, height, encoder_name, &quality)?;
         Ok(Self {
             encoder: Some(encoder),
             video_buffer: VideoBuffer::new(max_buffer_seconds as usize * ONE_MICROS),
             width,
             height,
             encoder_name: encoder_name.to_string(),
+            quality,
         })
     }
 
@@ -162,6 +169,7 @@ impl VideoEncoder for VaapiEncoder {
             self.width,
             self.height,
             &self.encoder_name,
+            &self.quality,
         )?);
         Ok(())
     }
@@ -185,8 +193,8 @@ impl VaapiEncoder {
         width: u32,
         height: u32,
         encoder: &str,
+        quality: &QualityPreset,
     ) -> anyhow::Result<ffmpeg::codec::encoder::Video> {
-        let config = load_or_create_config();
         let encoder_codec =
             ffmpeg::codec::encoder::find_by_name(encoder).ok_or(ffmpeg::Error::EncoderNotFound)?;
 
@@ -239,7 +247,7 @@ impl VaapiEncoder {
 
         let encoder_params = ffmpeg::codec::Parameters::new();
 
-        let opts = Self::get_encoder_params(&config);
+        let opts = Self::get_encoder_params(quality);
 
         encoder_ctx.set_parameters(encoder_params)?;
         let encoder = encoder_ctx.open_with(opts)?;
@@ -277,11 +285,11 @@ impl VaapiEncoder {
         }
     }
 
-    fn get_encoder_params(config: &AppConfig) -> ffmpeg::Dictionary {
+    fn get_encoder_params(quality: &QualityPreset) -> ffmpeg::Dictionary {
         let mut opts = ffmpeg::Dictionary::new();
         opts.set("vsync", "vfr");
         opts.set("rc", "VBR");
-        match config.quality {
+        match quality {
             QualityPreset::Low => {
                 opts.set("qp", "30");
             }

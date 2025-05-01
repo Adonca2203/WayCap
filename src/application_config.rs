@@ -6,7 +6,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum QualityPreset {
     Low,

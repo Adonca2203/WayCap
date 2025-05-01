@@ -34,10 +34,10 @@ impl AppMode for ShadowCapMode {
         let video_encoder: Arc<Mutex<dyn VideoEncoder + Send>> =
             match ctx.config.encoder {
                 application_config::EncoderToUse::H264Nvenc => Arc::new(Mutex::new(
-                    NvencEncoder::new(ctx.width, ctx.height, self.max_seconds)?,
+                    NvencEncoder::new(ctx.width, ctx.height, self.max_seconds, ctx.config.quality)?,
                 )),
                 application_config::EncoderToUse::H264Vaapi => Arc::new(Mutex::new(
-                    VaapiEncoder::new(ctx.width, ctx.height, self.max_seconds)?,
+                    VaapiEncoder::new(ctx.width, ctx.height, self.max_seconds, ctx.config.quality)?,
                 )),
             };
 

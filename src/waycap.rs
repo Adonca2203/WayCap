@@ -1,6 +1,6 @@
 use crate::{
     app_context::AppContext,
-    application_config::{load_or_create_config, update_config, AppConfig},
+    application_config::{update_config, AppConfig},
     dbus,
     modes::AppMode,
     pw_capture::{audio_stream::AudioCapture, video_stream::VideoCapture},
@@ -28,10 +28,8 @@ pub struct WayCap<M: AppMode> {
 }
 
 impl<M: AppMode> WayCap<M> {
-    pub async fn new(mut mode: M) -> Result<Self> {
+    pub async fn new(mut mode: M, config: AppConfig) -> Result<Self> {
         simple_logging::log_to_file("logs.txt", log::LevelFilter::Debug)?;
-        let config = load_or_create_config();
-        log::debug!("Config: {:?}", config);
         let current_time = SystemTime::now();
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
