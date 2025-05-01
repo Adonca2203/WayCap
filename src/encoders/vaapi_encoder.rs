@@ -301,7 +301,9 @@ impl VaapiEncoder {
 
 impl Drop for VaapiEncoder {
     fn drop(&mut self) {
-        let _ = self.drain();
+        if let Err(e) = self.drain() {
+            log::error!("Error while draining vaapi encoder during drop: {:?}", e);
+        }
         self.drop_encoder();
     }
 }

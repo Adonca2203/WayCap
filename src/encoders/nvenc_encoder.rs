@@ -181,7 +181,9 @@ impl NvencEncoder {
 
 impl Drop for NvencEncoder {
     fn drop(&mut self) {
-        let _ = self.drain();
+        if let Err(e) = self.drain() {
+            log::error!("Error while draining nvenc encoder during drop: {:?}", e);
+        }
         self.drop_encoder();
     }
 }

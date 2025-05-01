@@ -1,6 +1,5 @@
 use std::{
     sync::{atomic::AtomicBool, Arc},
-    thread::JoinHandle,
     time::{Duration, SystemTime},
 };
 
@@ -56,7 +55,7 @@ impl AppMode for ShadowCapMode {
         self.video_encoder = Some(video_encoder);
 
         // Audio
-        let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new_with_factory(
+        let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new_with_encoder(
             FfmpegAudioEncoder::new_opus,
             ctx.config.max_seconds,
         )?));
@@ -135,12 +134,16 @@ impl AppMode for ShadowCapMode {
 }
 
 impl ShadowCapMode {
-    pub async fn new(max_seconds: u32) -> Self {
-        Self {
+    pub async fn new(max_seconds: u32) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            max_seconds <= 86400,
+            "Max seconds is above 24 hours. This is too much time for shadow capture"
+        );
+        Ok(Self {
             max_seconds: max_seconds * ONE_MICROS as u32,
             audio_encoder: None,
             video_encoder: None,
-        }
+        })
     }
 
     // These look to be generic between modes and the only real thing that changes is what we do
@@ -157,8 +160,8 @@ impl ShadowCapMode {
         stop_audio: Arc<AtomicBool>,
         mut audio_receiver: HeapCons<RawAudioFrame>,
         audio_encoder: Arc<Mutex<AudioEncoder<FfmpegAudioEncoder>>>,
-    ) -> JoinHandle<()> {
-        std::thread::spawn(move || loop {
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::task::spawn_blocking(move || loop {
             if stop_audio.load(std::sync::atomic::Ordering::Acquire) {
                 break;
             }
@@ -192,8 +195,8 @@ impl ShadowCapMode {
         stop_video: Arc<AtomicBool>,
         mut video_receiver: HeapCons<RawVideoFrame>,
         video_encoder: Arc<Mutex<dyn VideoEncoder + Send>>,
-    ) -> JoinHandle<()> {
-        std::thread::spawn(move || {
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::task::spawn_blocking(move || {
             let mut last_timestamp: u64 = 0;
             loop {
                 if stop_video.load(std::sync::atomic::Ordering::Acquire) {

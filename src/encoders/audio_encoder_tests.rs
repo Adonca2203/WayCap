@@ -105,7 +105,7 @@ fn create_default_frame_encoder() -> FakeAudioEncoder {
 #[test]
 fn test_process_drain() {
     let fake = create_default_frame_encoder();
-    let mut audio_encoder = AudioEncoder::new_with_factory(|| Ok(fake.clone()), 10).unwrap();
+    let mut audio_encoder = AudioEncoder::new_with_encoder(|| Ok(fake.clone()), 10).unwrap();
 
     let mut raw = [
         RawAudioFrame {
@@ -134,7 +134,7 @@ fn test_process_drain() {
 #[test]
 fn test_process_no_trim() {
     let fake = create_default_frame_encoder();
-    let mut audio_encoder = AudioEncoder::new_with_factory(|| Ok(fake.clone()), 10).unwrap();
+    let mut audio_encoder = AudioEncoder::new_with_encoder(|| Ok(fake.clone()), 10).unwrap();
 
     let mut raw = [
         RawAudioFrame {
@@ -166,7 +166,7 @@ fn test_process_no_trim() {
 #[test]
 fn test_process_duplicate_timestamps_when_leftover_is_multiple_of_sample() {
     let fake = create_default_frame_encoder();
-    let mut audio_encoder = AudioEncoder::new_with_factory(|| Ok(fake.clone()), 60).unwrap();
+    let mut audio_encoder = AudioEncoder::new_with_encoder(|| Ok(fake.clone()), 60).unwrap();
 
     let mut raw_frames = vec![];
     let mut actual_capture_times = vec![];
@@ -210,7 +210,7 @@ fn test_process_duplicate_timestamps_when_leftover_is_multiple_of_sample() {
 fn test_process_trimming() {
     let fake = create_default_frame_encoder();
     let max_frames = 15;
-    let mut audio_encoder = AudioEncoder::new_with_factory(|| Ok(fake.clone()), 5).unwrap();
+    let mut audio_encoder = AudioEncoder::new_with_encoder(|| Ok(fake.clone()), 5).unwrap();
 
     let mut raw_frames = vec![];
     // 5 second window

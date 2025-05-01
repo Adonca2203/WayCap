@@ -12,7 +12,6 @@ use portal_screencast::{CursorMode, ScreenCast, SourceType};
 use ringbuf::{traits::Split, HeapRb};
 use std::{
     sync::{atomic::AtomicBool, Arc},
-    thread::JoinHandle,
     time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::mpsc;
@@ -36,7 +35,7 @@ impl<M: AppMode> WayCap<M> {
         let current_time = SystemTime::now();
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
-        let mut join_handles: Vec<JoinHandle<()>> = Vec::new();
+        let mut join_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
         let (dbus_save_tx, dbus_save_rx) = mpsc::channel(1);
         let (dbus_config_tx, dbus_config_rx): (mpsc::Sender<AppConfig>, mpsc::Receiver<AppConfig>) =
@@ -64,7 +63,7 @@ impl<M: AppMode> WayCap<M> {
         let audio_ready_pw = Arc::clone(&audio_ready);
         let saving_video = Arc::clone(&saving);
 
-        let pw_video_capture = std::thread::spawn(move || {
+        let pw_video_capture = tokio::task::spawn_blocking(move || {
             let mut screen_cast = ScreenCast::new().unwrap();
             screen_cast.set_source_types(SourceType::all());
             screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
@@ -105,7 +104,7 @@ impl<M: AppMode> WayCap<M> {
                     std::process::exit(1);
                 }
 
-                std::thread::sleep(Duration::from_millis(10));
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
         join_handles.push(pw_video_capture);
@@ -114,7 +113,7 @@ impl<M: AppMode> WayCap<M> {
         let (audio_ring_sender, audio_ring_receiver) = audio_ring_buffer.split();
         let (pw_audio_sender, pw_audio_recv) = pw::channel::channel();
         let saving_audio = Arc::clone(&saving);
-        let pw_audio_worker = std::thread::spawn(move || {
+        let pw_audio_worker = tokio::task::spawn_blocking(move || {
             log::debug!("Starting audio stream");
             let audio_cap = AudioCapture::new(video_ready, audio_ready);
             audio_cap
@@ -167,14 +166,23 @@ impl<M: AppMode> WayCap<M> {
         }
 
         // Shutdown capture threads
-        let _ = self.pw_video_terminate_tx.send(Terminate);
-        let _ = self.pw_audio_terminate_tx.send(Terminate);
+        if self.pw_video_terminate_tx.send(Terminate).is_err() {
+            log::error!("Error sending terminate signal to pipewire video capture.");
+        }
+        if self.pw_audio_terminate_tx.send(Terminate).is_err() {
+            log::error!("Error sending terminate signal to pipewire audio capture.");
+        }
+
         if let Some(conn) = self.dbus_conn.take() {
-            let _ = conn.close().await;
+            if let Err(e) = conn.close().await {
+                log::error!("Error closing dbus connection: {:?}", e);
+            }
         }
 
         for handle in self.context.join_handles.drain(..) {
-            let _ = handle.join();
+            if let Err(e) = handle.await {
+                log::error!("Error shutting down a worker handle: {:?}", e);
+            }
         }
 
         Ok(())
