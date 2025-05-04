@@ -160,8 +160,8 @@ impl ShadowCapMode {
         stop_audio: Arc<AtomicBool>,
         mut audio_receiver: HeapCons<RawAudioFrame>,
         audio_encoder: Arc<Mutex<AudioEncoder<FfmpegAudioEncoder>>>,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::task::spawn_blocking(move || loop {
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || loop {
             if stop_audio.load(std::sync::atomic::Ordering::Acquire) {
                 break;
             }
@@ -195,8 +195,8 @@ impl ShadowCapMode {
         stop_video: Arc<AtomicBool>,
         mut video_receiver: HeapCons<RawVideoFrame>,
         video_encoder: Arc<Mutex<dyn VideoEncoder + Send>>,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::task::spawn_blocking(move || {
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
             let mut last_timestamp: u64 = 0;
             loop {
                 if stop_video.load(std::sync::atomic::Ordering::Acquire) {

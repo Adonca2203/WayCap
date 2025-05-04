@@ -33,7 +33,7 @@ impl<M: AppMode> WayCap<M> {
         let current_time = SystemTime::now();
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
-        let mut join_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut join_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
 
         let (dbus_save_tx, dbus_save_rx) = mpsc::channel(1);
         let (dbus_config_tx, dbus_config_rx): (mpsc::Sender<AppConfig>, mpsc::Receiver<AppConfig>) =
@@ -61,7 +61,7 @@ impl<M: AppMode> WayCap<M> {
         let audio_ready_pw = Arc::clone(&audio_ready);
         let saving_video = Arc::clone(&saving);
 
-        let pw_video_capture = tokio::task::spawn_blocking(move || {
+        let pw_video_capture = std::thread::spawn(move || {
             let mut screen_cast = ScreenCast::new().unwrap();
             screen_cast.set_source_types(SourceType::all());
             screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
@@ -111,7 +111,7 @@ impl<M: AppMode> WayCap<M> {
         let (audio_ring_sender, audio_ring_receiver) = audio_ring_buffer.split();
         let (pw_audio_sender, pw_audio_recv) = pw::channel::channel();
         let saving_audio = Arc::clone(&saving);
-        let pw_audio_worker = tokio::task::spawn_blocking(move || {
+        let pw_audio_worker = std::thread::spawn(move || {
             log::debug!("Starting audio stream");
             let audio_cap = AudioCapture::new(video_ready, audio_ready);
             audio_cap
@@ -178,7 +178,7 @@ impl<M: AppMode> WayCap<M> {
         }
 
         for handle in self.context.join_handles.drain(..) {
-            if let Err(e) = handle.await {
+            if let Err(e) = handle.join() {
                 log::error!("Error shutting down a worker handle: {:?}", e);
             }
         }
