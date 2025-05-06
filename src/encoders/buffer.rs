@@ -35,7 +35,7 @@ impl VideoFrameData {
 /// The buffer is ordered by decoding timestamp (DTS) and maintains complete GOPs (groups of pictures),
 /// ensuring that no partial GOPs are kept when trimming for ease of muxing and playback.
 #[derive(Clone)]
-pub struct VideoBuffer {
+pub struct ShadowCaptureVideoBuffer {
     frames: BTreeMap<i64, VideoFrameData>,
 
     /// Maximum duration (in seconds) that the buffer should retain.
@@ -47,7 +47,7 @@ pub struct VideoBuffer {
     key_frame_keys: Vec<i64>,
 }
 
-impl VideoBuffer {
+impl ShadowCaptureVideoBuffer {
     /// Creates a new `FrameBuffer` with a specified maximum duration.
     ///
     /// # Arguments

@@ -18,7 +18,7 @@ use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
 use encoders::{
     audio_encoder::{AudioEncoderImpl, FfmpegAudioEncoder},
-    buffer::{AudioBuffer, VideoBuffer},
+    buffer::{AudioBuffer, ShadowCaptureVideoBuffer},
     video_encoder::ONE_MICROS,
 };
 use ffmpeg_next::{self as ffmpeg};
@@ -82,7 +82,7 @@ async fn main() -> Result<(), Error> {
 
 fn save_buffer(
     filename: &str,
-    video_buffer: &VideoBuffer,
+    video_buffer: &ShadowCaptureVideoBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
     audio_buffer: &AudioBuffer,
     audio_encoder: &FfmpegAudioEncoder,

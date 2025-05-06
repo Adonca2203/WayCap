@@ -13,10 +13,14 @@ use ffmpeg_next::{
     Rational,
 };
 use log::error;
+use ringbuf::{
+    traits::{Producer, Split},
+    HeapCons, HeapProd, HeapRb,
+};
 
 use super::{
-    buffer::{VideoBuffer, VideoFrameData},
-    video_encoder::{VideoEncoder, GOP_SIZE, ONE_MICROS},
+    buffer::VideoFrameData,
+    video_encoder::{VideoEncoder, GOP_SIZE},
 };
 
 thread_local! {
@@ -25,32 +29,35 @@ thread_local! {
 
 pub struct VaapiEncoder {
     encoder: Option<ffmpeg::codec::encoder::Video>,
-    video_buffer: VideoBuffer,
     width: u32,
     height: u32,
     encoder_name: String,
     quality: QualityPreset,
+    encoded_frame_recv: Option<HeapCons<(i64, VideoFrameData)>>,
+    encoded_frame_sender: Option<HeapProd<(i64, VideoFrameData)>>,
 }
 
 impl VideoEncoder for VaapiEncoder {
-    fn new(
-        width: u32,
-        height: u32,
-        max_buffer_seconds: u32,
-        quality: QualityPreset,
-    ) -> anyhow::Result<Self>
+    fn new(width: u32, height: u32, quality: QualityPreset) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
+        // TODO: Should create a child thread that polls the encoder and does the buffer logic
+        // doing it all at once takes too long
+
         let encoder_name = "h264_vaapi";
         let encoder = Self::create_encoder(width, height, encoder_name, &quality)?;
+        let video_ring_buffer = HeapRb::<(i64, VideoFrameData)>::new(120);
+        let (video_ring_sender, video_ring_receiver) = video_ring_buffer.split();
+
         Ok(Self {
             encoder: Some(encoder),
-            video_buffer: VideoBuffer::new(max_buffer_seconds as usize * ONE_MICROS),
             width,
             height,
             encoder_name: encoder_name.to_string(),
             quality,
+            encoded_frame_recv: Some(video_ring_receiver),
+            encoded_frame_sender: Some(video_ring_sender),
         })
     }
 
@@ -126,14 +133,21 @@ impl VideoEncoder for VaapiEncoder {
                 let mut packet = ffmpeg::codec::packet::Packet::empty();
                 if encoder.receive_packet(&mut packet).is_ok() {
                     if let Some(data) = packet.data() {
-                        let frame_data = VideoFrameData::new(
-                            data.to_vec(),
-                            packet.is_key(),
-                            packet.pts().unwrap_or(0),
-                        );
-
-                        self.video_buffer
-                            .insert(packet.dts().unwrap_or(0), frame_data);
+                        if let Some(ref mut sender) = self.encoded_frame_sender {
+                            if sender
+                                .try_push((
+                                    packet.dts().unwrap_or(0),
+                                    VideoFrameData::new(
+                                        data.to_vec(),
+                                        packet.is_key(),
+                                        packet.pts().unwrap_or(0),
+                                    ),
+                                ))
+                                .is_err()
+                            {
+                                log::error!("Could not send encoded packet to the ringbuf");
+                            }
+                        }
                     };
                 }
             });
@@ -148,14 +162,21 @@ impl VideoEncoder for VaapiEncoder {
             let mut packet = ffmpeg::codec::packet::Packet::empty();
             while encoder.receive_packet(&mut packet).is_ok() {
                 if let Some(data) = packet.data() {
-                    let frame_data = VideoFrameData::new(
-                        data.to_vec(),
-                        packet.is_key(),
-                        packet.pts().unwrap_or(0),
-                    );
-
-                    self.video_buffer
-                        .insert(packet.dts().unwrap_or(0), frame_data);
+                    if let Some(ref mut sender) = self.encoded_frame_sender {
+                        if sender
+                            .try_push((
+                                packet.dts().unwrap_or(0),
+                                VideoFrameData::new(
+                                    data.to_vec(),
+                                    packet.is_key(),
+                                    packet.pts().unwrap_or(0),
+                                ),
+                            ))
+                            .is_err()
+                        {
+                            log::error!("Could not send encoded packet to the ringbuf");
+                        }
+                    }
                 };
                 packet = ffmpeg::codec::packet::Packet::empty();
             }
@@ -178,13 +199,12 @@ impl VideoEncoder for VaapiEncoder {
         &self.encoder
     }
 
-    fn get_buffer(&self) -> &VideoBuffer {
-        &self.video_buffer
+    fn drop_encoder(&mut self) {
+        self.encoder.take();
     }
 
-    fn drop_encoder(&mut self) {
-        self.video_buffer.reset();
-        self.encoder.take();
+    fn take_encoded_recv(&mut self) -> Option<HeapCons<(i64, VideoFrameData)>> {
+        self.encoded_frame_recv.take()
     }
 }
 
