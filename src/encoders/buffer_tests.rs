@@ -17,7 +17,7 @@ fn test_video_buffer_no_trim() {
         VideoFrameData::new(vec![3], true, 6),
     ];
 
-    let mut buffer = VideoBuffer::new(10);
+    let mut buffer = ShadowCaptureVideoBuffer::new(10);
 
     buffer.insert(1, dummy_frames[0].clone());
     buffer.insert(2, dummy_frames[1].clone());
@@ -42,7 +42,7 @@ fn test_video_buffer_no_trim() {
 
 #[test]
 fn test_video_buffer_trimming() {
-    let mut buffer = VideoBuffer::new(10);
+    let mut buffer = ShadowCaptureVideoBuffer::new(10);
 
     let dummy_frames = [
         VideoFrameData::new(vec![1], true, 0),

@@ -29,7 +29,7 @@ pub struct WayCap<M: AppMode> {
 
 impl<M: AppMode> WayCap<M> {
     pub async fn new(mut mode: M, config: AppConfig) -> Result<Self> {
-        simple_logging::log_to_file("logs.txt", log::LevelFilter::Debug)?;
+        simple_logging::log_to_file("logs.txt", log::LevelFilter::Trace)?;
         let current_time = SystemTime::now();
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -61,15 +61,16 @@ impl<M: AppMode> WayCap<M> {
         let audio_ready_pw = Arc::clone(&audio_ready);
         let saving_video = Arc::clone(&saving);
 
-        let pw_video_capture = std::thread::spawn(move || {
-            let mut screen_cast = ScreenCast::new().unwrap();
-            screen_cast.set_source_types(SourceType::all());
-            screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
-            let active_cast = screen_cast.start(None).unwrap();
+        let mut screen_cast = ScreenCast::new()?;
+        screen_cast.set_source_types(SourceType::all());
+        screen_cast.set_cursor_mode(CursorMode::EMBEDDED);
+        let active_cast = screen_cast.start(None)?;
 
-            let fd = active_cast.pipewire_fd();
-            let stream = active_cast.streams().next().unwrap();
-            let stream_node = stream.pipewire_node();
+        let fd = active_cast.pipewire_fd();
+        let stream = active_cast.streams().next().unwrap();
+        let stream_node = stream.pipewire_node();
+
+        let pw_video_capture = std::thread::spawn(move || {
             let video_cap = VideoCapture::new(video_ready_pw, audio_ready_pw);
             video_cap
                 .run(
