@@ -42,9 +42,6 @@ impl VideoEncoder for VaapiEncoder {
     where
         Self: Sized,
     {
-        // TODO: Should create a child thread that polls the encoder and does the buffer logic
-        // doing it all at once takes too long
-
         let encoder_name = "h264_vaapi";
         let encoder = Self::create_encoder(width, height, encoder_name, &quality)?;
         let video_ring_buffer = HeapRb::<(i64, VideoFrameData)>::new(120);
@@ -65,6 +62,10 @@ impl VideoEncoder for VaapiEncoder {
         if let Some(ref mut encoder) = self.encoder {
             // Convert BGRA to NV12 then transfer it to a hw frame and send it to the
             // encoder
+            //
+            // TODO: Figure out how to use DMA BUF so we don't need to do this to optimize
+            // performance. This function takes 15ms on average to run which is very close to being
+            // over the 1/60 target fps
             SCALER.with(|scaler_cell| {
                 let mut scaler = scaler_cell.borrow_mut();
                 if scaler.is_none() {

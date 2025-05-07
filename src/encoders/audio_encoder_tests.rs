@@ -33,8 +33,7 @@ impl FakeAudioEncoder {
         }
     }
 
-    /// In your test you can push `Vec<u8>`s here; they’ll come back in `receive_packet`.
-    pub fn push_packet(&mut self, data: Vec<f32>) {
+    fn push_packet(&mut self, data: Vec<f32>) {
         self.queued_packets.push_back(data);
     }
 }
