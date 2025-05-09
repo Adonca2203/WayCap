@@ -14,11 +14,13 @@ mod modes;
 mod pw_capture;
 mod waycap;
 
+use std::os::fd::RawFd;
+
 use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
 use encoders::{
     audio_encoder::{AudioEncoderImpl, FfmpegAudioEncoder},
-    buffer::{AudioBuffer, ShadowCaptureVideoBuffer},
+    buffer::{ShadowCaptureAudioBuffer, ShadowCaptureVideoBuffer},
     video_encoder::ONE_MICROS,
 };
 use ffmpeg_next::{self as ffmpeg};
@@ -51,6 +53,10 @@ impl RawAudioFrame {
 pub struct RawVideoFrame {
     bytes: Vec<u8>,
     timestamp: i64,
+    dmabuf_fd: Option<RawFd>,
+    stride: i32,
+    offset: u32,
+    size: u32,
 }
 
 impl RawVideoFrame {
@@ -65,7 +71,7 @@ impl RawVideoFrame {
 
 pub struct Terminate;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main]
 async fn main() -> Result<(), Error> {
     pw::init();
     ffmpeg::init()?;
@@ -84,7 +90,7 @@ fn save_buffer(
     filename: &str,
     video_buffer: &ShadowCaptureVideoBuffer,
     video_encoder: &ffmpeg::codec::encoder::Video,
-    audio_buffer: &AudioBuffer,
+    audio_buffer: &ShadowCaptureAudioBuffer,
     audio_encoder: &FfmpegAudioEncoder,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;

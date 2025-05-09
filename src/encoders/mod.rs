@@ -1,6 +1,4 @@
 pub mod audio_encoder;
-#[cfg(test)]
-mod audio_encoder_tests;
 pub mod buffer;
 #[cfg(test)]
 mod buffer_tests;

@@ -11,8 +11,8 @@ use crate::{
     app_context::AppContext,
     application_config,
     encoders::{
-        audio_encoder::{AudioEncoder, FfmpegAudioEncoder},
-        buffer::{ShadowCaptureVideoBuffer, VideoFrameData},
+        audio_encoder::{AudioEncoder, EncodedAudioFrameData, FfmpegAudioEncoder},
+        buffer::{ShadowCaptureAudioBuffer, ShadowCaptureVideoBuffer, VideoFrameData},
         nvenc_encoder::NvencEncoder,
         vaapi_encoder::VaapiEncoder,
         video_encoder::{VideoEncoder, ONE_MICROS},
@@ -26,6 +26,7 @@ pub struct ShadowCapMode {
     audio_encoder: Option<Arc<Mutex<AudioEncoder<FfmpegAudioEncoder>>>>,
     video_encoder: Option<Arc<Mutex<dyn VideoEncoder + Send>>>,
     video_buffer: Arc<Mutex<ShadowCaptureVideoBuffer>>,
+    audio_buffer: Arc<Mutex<ShadowCaptureAudioBuffer>>,
 }
 
 impl AppMode for ShadowCapMode {
@@ -53,12 +54,20 @@ impl AppMode for ShadowCapMode {
             Arc::clone(&video_encoder),
         );
         ctx.join_handles.push(video_worker);
-        self.video_encoder = Some(video_encoder.clone());
+
+        let recv = { video_encoder.lock().await.take_encoded_recv() }
+            .context("Could not take encoded frame recv")?;
+        let shadow_worker = Self::create_shadow_video_worker(
+            recv,
+            Arc::clone(&self.video_buffer),
+            Arc::clone(&ctx.stop),
+        );
+        ctx.join_handles.push(shadow_worker);
+        self.video_encoder = Some(video_encoder);
 
         // Audio
         let audio_encoder = Arc::new(Mutex::new(AudioEncoder::new_with_encoder(
             FfmpegAudioEncoder::new_opus,
-            ctx.config.max_seconds,
         )?));
 
         let audio_owned_recv = ctx
@@ -72,14 +81,17 @@ impl AppMode for ShadowCapMode {
             Arc::clone(&audio_encoder),
         );
         ctx.join_handles.push(audio_worker);
+
+        let aud_recv = { audio_encoder.lock().await.take_encoded_recv() }
+            .context("Could not take ownership of encoded audio frame recv")?;
+
+        let audio_shadow_worker = Self::create_shadow_audio_worker(
+            aud_recv,
+            Arc::clone(&self.audio_buffer),
+            Arc::clone(&ctx.stop),
+        );
+        ctx.join_handles.push(audio_shadow_worker);
         self.audio_encoder = Some(audio_encoder);
-
-        let recv = { video_encoder.lock().await.take_encoded_recv() }
-            .context("Could not take encoded frame recv")?;
-        let shadow_worker =
-            Self::create_shadow_worker(recv, Arc::clone(&self.video_buffer), Arc::clone(&ctx.stop));
-
-        ctx.join_handles.push(shadow_worker);
 
         log::debug!("Successfully initialized Shadow Capture Mode");
         Ok(())
@@ -89,10 +101,11 @@ impl AppMode for ShadowCapMode {
         ctx.saving.store(true, std::sync::atomic::Ordering::Release);
         if let Some(video_encoder) = &self.video_encoder {
             if let Some(audio_encoder) = &self.audio_encoder {
-                let (mut video_lock, mut audio_lock, mut video_buffer) = tokio::join!(
+                let (mut video_lock, mut audio_lock, mut video_buffer, mut audio_buffer) = tokio::join!(
                     video_encoder.lock(),
                     audio_encoder.lock(),
-                    self.video_buffer.lock()
+                    self.video_buffer.lock(),
+                    self.audio_buffer.lock(),
                 );
 
                 // Drain both encoders of any remaining frames being processed
@@ -105,7 +118,6 @@ impl AppMode for ShadowCapMode {
                     .as_ref()
                     .context("Could not get video encoder")?;
 
-                let audio_buffer = audio_lock.get_buffer();
                 let audio_encoder = audio_lock
                     .get_encoder()
                     .as_ref()
@@ -115,12 +127,13 @@ impl AppMode for ShadowCapMode {
                     &filename,
                     &video_buffer,
                     video_encoder,
-                    audio_buffer,
+                    &audio_buffer,
                     audio_encoder,
                 )?;
 
                 video_lock.reset()?;
                 video_buffer.reset();
+                audio_buffer.reset();
                 audio_lock.reset_encoder(FfmpegAudioEncoder::new_opus)?;
             }
         }
@@ -156,6 +169,9 @@ impl ShadowCapMode {
             audio_encoder: None,
             video_encoder: None,
             video_buffer: Arc::new(Mutex::new(ShadowCaptureVideoBuffer::new(
+                actual_max as usize,
+            ))),
+            audio_buffer: Arc::new(Mutex::new(ShadowCaptureAudioBuffer::new(
                 actual_max as usize,
             ))),
         })
@@ -256,7 +272,7 @@ impl ShadowCapMode {
         })
     }
 
-    fn create_shadow_worker(
+    fn create_shadow_video_worker(
         mut recv: HeapCons<(i64, VideoFrameData)>,
         buffer: Arc<Mutex<ShadowCaptureVideoBuffer>>,
         stop: Arc<AtomicBool>,
@@ -268,6 +284,26 @@ impl ShadowCapMode {
 
             while let Some((dts, encoded_frame)) = recv.try_pop() {
                 buffer.blocking_lock().insert(dts, encoded_frame);
+            }
+
+            std::thread::sleep(Duration::from_nanos(100));
+        })
+    }
+
+    fn create_shadow_audio_worker(
+        mut recv: HeapCons<EncodedAudioFrameData>,
+        audio_buffer: Arc<Mutex<ShadowCaptureAudioBuffer>>,
+        stop: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || loop {
+            if stop.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+
+            while let Some(encoded_frame) = recv.try_pop() {
+                let mut audio_buf = audio_buffer.blocking_lock();
+                audio_buf.insert_capture_time(encoded_frame.timestamp);
+                audio_buf.insert(encoded_frame.pts, encoded_frame.data);
             }
 
             std::thread::sleep(Duration::from_nanos(100));

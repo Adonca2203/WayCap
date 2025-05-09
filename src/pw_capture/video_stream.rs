@@ -8,7 +8,10 @@ use pipewire::{
     self as pw,
     context::Context,
     main_loop::MainLoop,
-    spa::utils::Direction,
+    spa::{
+        buffer::{Data, DataType},
+        utils::Direction,
+    },
     stream::{Stream, StreamFlags, StreamState},
 };
 use pw::{properties::properties, spa};
@@ -163,19 +166,26 @@ impl VideoCapture {
 
                         // send frame data to encoder
                         let data = &mut datas[0];
-                        if let Some(frame) = data.data() {
-                            if ringbuf_producer
+
+                        let fd = Self::get_dmabuf_fd(data);
+
+                        if fd.is_some()
+                            && ringbuf_producer
                                 .try_push(RawVideoFrame {
-                                    bytes: frame.to_vec(),
+                                    // No need to copy the frame data
+                                    bytes: Vec::new(),
                                     timestamp: time_us,
+                                    dmabuf_fd: fd,
+                                    stride: data.chunk().stride(),
+                                    offset: data.chunk().offset(),
+                                    size: data.chunk().size(),
                                 })
                                 .is_err()
-                            {
-                                log::error!(
-                                    "Error sending video frame at: {:?}. Ring buf full?",
-                                    time_us
-                                );
-                            }
+                        {
+                            log::error!(
+                                "Error sending video frame at: {:?}. Ring buf full?",
+                                time_us
+                            );
                         }
                     }
                 }
@@ -200,13 +210,14 @@ impl VideoCapture {
                 Choice,
                 Enum,
                 Id,
-                pw::spa::param::video::VideoFormat::xRGB,
-                pw::spa::param::video::VideoFormat::RGB,
-                pw::spa::param::video::VideoFormat::RGB,
-                pw::spa::param::video::VideoFormat::RGBA,
-                pw::spa::param::video::VideoFormat::RGBx,
-                pw::spa::param::video::VideoFormat::BGRx,
+                pw::spa::param::video::VideoFormat::NV12,
                 pw::spa::param::video::VideoFormat::I420,
+                pw::spa::param::video::VideoFormat::BGRA,
+            ),
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::VideoModifier,
+                Long,
+                0
             ),
             pw::spa::pod::property!(
                 pw::spa::param::format::FormatProperties::VideoSize,
@@ -258,5 +269,19 @@ impl VideoCapture {
 
         pw_loop.run();
         Ok(())
+    }
+
+    fn get_dmabuf_fd(data: &Data) -> Option<RawFd> {
+        let raw_data = data.as_raw();
+
+        if data.type_() == DataType::DmaBuf {
+            let fd = raw_data.fd;
+
+            if fd > 0 {
+                return Some(fd as i32);
+            }
+        }
+
+        None
     }
 }

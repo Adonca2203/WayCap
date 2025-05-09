@@ -2,10 +2,12 @@ use std::collections::VecDeque;
 
 use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, Rational};
+use ringbuf::{
+    traits::{Producer, Split},
+    HeapCons, HeapProd, HeapRb,
+};
 
 use crate::RawAudioFrame;
-
-use super::{buffer::AudioBuffer, video_encoder::ONE_MICROS};
 
 const MIN_RMS: f32 = 0.01;
 
@@ -114,14 +116,27 @@ impl AsRef<ffmpeg::codec::encoder::Audio> for FfmpegAudioEncoder {
     }
 }
 
+/// Represents an encoded audio frame encoded by the Opus encoder.
+pub struct EncodedAudioFrameData {
+    /// The raw bytes of the encoded frame
+    pub data: Vec<u8>,
+    /// The presentation timestamp in the encoder's time base
+    /// (960 samples per channel = ~20 ms)
+    pub pts: i64,
+    /// The timestamp for when the frame was originally captured in micro seconds
+    pub timestamp: i64,
+}
+
 pub struct AudioEncoder<E>
 where
     E: AudioEncoderImpl<Error = ffmpeg::Error>,
 {
     encoder: Option<E>,
-    audio_buffer: AudioBuffer,
     next_pts: i64,
     leftover_data: VecDeque<f32>,
+    encoded_samples_recv: Option<HeapCons<EncodedAudioFrameData>>,
+    encoded_samples_sender: Option<HeapProd<EncodedAudioFrameData>>,
+    capture_timestamps: VecDeque<i64>,
 }
 
 impl<E> AudioEncoder<E>
@@ -130,16 +145,19 @@ where
 {
     pub fn new_with_encoder(
         factory: impl Fn() -> Result<E, ffmpeg::Error>,
-        max_seconds: u32,
     ) -> Result<Self, ffmpeg::Error> {
         let encoder = factory()?;
-        let max_time = max_seconds as usize * ONE_MICROS;
+
+        let audio_ring_buffer = HeapRb::<EncodedAudioFrameData>::new(5);
+        let (sender, receiver) = audio_ring_buffer.split();
 
         Ok(Self {
             encoder: Some(encoder),
-            audio_buffer: AudioBuffer::new(max_time),
             next_pts: 0,
             leftover_data: VecDeque::new(),
+            encoded_samples_recv: Some(receiver),
+            encoded_samples_sender: Some(sender),
+            capture_timestamps: VecDeque::with_capacity(4),
         })
     }
 
@@ -173,7 +191,7 @@ where
                 frame.set_pts(Some(self.next_pts));
                 frame.set_rate(encoder.rate());
 
-                self.audio_buffer.insert_capture_time(raw_frame.timestamp);
+                self.capture_timestamps.push_back(raw_frame.timestamp);
                 encoder.send_frame(&frame)?;
 
                 // Try and get a frame back from encoder
@@ -181,7 +199,18 @@ where
                 if encoder.receive_packet(&mut packet).is_ok() {
                     if let Some(data) = packet.data() {
                         let pts = packet.pts().unwrap_or(0);
-                        self.audio_buffer.insert_frame(pts, data.to_vec());
+                        if let Some(ref mut sender) = self.encoded_samples_sender {
+                            if sender
+                                .try_push(EncodedAudioFrameData {
+                                    data: data.to_vec(),
+                                    pts,
+                                    timestamp: self.capture_timestamps.pop_front().unwrap_or(0),
+                                })
+                                .is_err()
+                            {
+                                log::error!("Could not send encoded packet to audio ringbuf");
+                            }
+                        }
                     }
                 }
 
@@ -196,10 +225,6 @@ where
         &self.encoder
     }
 
-    pub fn get_buffer(&self) -> &AudioBuffer {
-        &self.audio_buffer
-    }
-
     // Drain remaining frames being processed in the encoder
     pub fn drain(&mut self) -> Result<(), ffmpeg::Error> {
         if let Some(ref mut encoder) = self.encoder {
@@ -208,16 +233,27 @@ where
             while encoder.receive_packet(&mut packet).is_ok() {
                 if let Some(data) = packet.data() {
                     let pts = packet.pts().unwrap_or(0);
-                    self.audio_buffer.insert_frame(pts, data.to_vec());
+                    if let Some(ref mut sender) = self.encoded_samples_sender {
+                        if sender
+                            .try_push(EncodedAudioFrameData {
+                                data: data.to_vec(),
+                                pts,
+                                timestamp: self.capture_timestamps.pop_front().unwrap_or(0),
+                            })
+                            .is_err()
+                        {
+                            log::error!("Could not send encoded packet to audio ringbuf");
+                        }
+                    }
                 }
             }
         }
+
         Ok(())
     }
 
     pub fn drop_encoder(&mut self) {
         self.encoder.take();
-        self.audio_buffer.reset();
     }
 
     pub fn reset_encoder(
@@ -228,6 +264,10 @@ where
         self.encoder = Some(factory()?);
 
         Ok(())
+    }
+
+    pub fn take_encoded_recv(&mut self) -> Option<HeapCons<EncodedAudioFrameData>> {
+        self.encoded_samples_recv.take()
     }
 }
 

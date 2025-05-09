@@ -81,7 +81,7 @@ fn test_video_buffer_trimming() {
 
 #[test]
 fn test_audio_buffer_no_trim() {
-    let mut audio_buffer = AudioBuffer::new(10);
+    let mut audio_buffer = ShadowCaptureAudioBuffer::new(10);
     let dummy_data = [
         (1, vec![1]),
         (2, vec![1]),
@@ -91,7 +91,7 @@ fn test_audio_buffer_no_trim() {
     ];
 
     for (pts, data) in dummy_data {
-        audio_buffer.insert_frame(pts, data);
+        audio_buffer.insert(pts, data);
         audio_buffer.insert_capture_time(pts);
     }
 
@@ -106,7 +106,7 @@ fn test_audio_buffer_no_trim() {
 
 #[test]
 fn test_audio_buffer_trimming() {
-    let mut audio_buffer = AudioBuffer::new(10);
+    let mut audio_buffer = ShadowCaptureAudioBuffer::new(10);
     let dummy_data = [
         (1, vec![1]),
         (3, vec![1]),
@@ -121,7 +121,7 @@ fn test_audio_buffer_trimming() {
     ];
 
     for (pts, data) in dummy_data {
-        audio_buffer.insert_frame(pts, data);
+        audio_buffer.insert(pts, data);
         audio_buffer.insert_capture_time(pts);
     }
 

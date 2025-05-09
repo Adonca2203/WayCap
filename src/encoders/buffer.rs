@@ -147,7 +147,7 @@ impl ShadowCaptureVideoBuffer {
 }
 
 #[derive(Clone)]
-pub struct AudioBuffer {
+pub struct ShadowCaptureAudioBuffer {
     frames: BTreeMap<i64, Vec<u8>>,
 
     /// Maximum duration (in seconds) that the buffer should retain.
@@ -157,7 +157,7 @@ pub struct AudioBuffer {
     capture_times: Vec<i64>,
 }
 
-impl AudioBuffer {
+impl ShadowCaptureAudioBuffer {
     pub fn new(max_time: usize) -> Self {
         Self {
             frames: BTreeMap::new(),
@@ -175,7 +175,7 @@ impl AudioBuffer {
     /// * `timestamp` - The presentation timestamp (PTS) of the frame according to the audio
     ///   encoder.
     /// * `frame` - A [`AudioFrameData`] representing an encoded frame.
-    pub fn insert_frame(&mut self, timestamp: i64, frame: Vec<u8>) {
+    pub fn insert(&mut self, timestamp: i64, frame: Vec<u8>) {
         self.frames.insert(timestamp, frame);
 
         while let (Some(oldest), Some(newest)) =

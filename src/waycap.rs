@@ -87,7 +87,7 @@ impl<M: AppMode> WayCap<M> {
             let _ = active_cast.close();
         });
 
-        // Window mode return (0, 0) for dimensions to we have to get it from pipewire
+        // Window mode return (0, 0) for dimensions so we have to get it from pipewire
         if (width, height) == (0, 0) {
             // Wait to get back a negotiated resolution from pipewire
             let timeout = Duration::from_secs(5);

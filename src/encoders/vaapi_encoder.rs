@@ -2,12 +2,14 @@ use std::{cell::RefCell, ffi::CString, ptr::null_mut};
 
 use crate::application_config::QualityPreset;
 use anyhow::anyhow;
+use drm_fourcc::DrmFourcc;
 use ffmpeg_next::{
     self as ffmpeg,
     ffi::{
-        av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_ctx_alloc,
-        av_hwframe_ctx_init, av_hwframe_get_buffer, av_hwframe_transfer_data, AVBufferRef,
-        AVHWDeviceContext, AVHWFramesContext, AVPixelFormat,
+        av_buffer_create, av_buffer_default_free, av_buffer_ref, av_buffer_unref,
+        av_hwdevice_ctx_create, av_hwframe_ctx_alloc, av_hwframe_ctx_init, av_hwframe_get_buffer,
+        av_hwframe_transfer_data, AVBufferRef, AVDRMFrameDescriptor, AVHWDeviceContext,
+        AVHWFramesContext, AVPixelFormat,
     },
     software::scaling::{Context as Scaler, Flags},
     Rational,
@@ -35,6 +37,7 @@ pub struct VaapiEncoder {
     quality: QualityPreset,
     encoded_frame_recv: Option<HeapCons<(i64, VideoFrameData)>>,
     encoded_frame_sender: Option<HeapProd<(i64, VideoFrameData)>>,
+    filter_graph: Option<ffmpeg::filter::Graph>,
 }
 
 impl VideoEncoder for VaapiEncoder {
@@ -46,6 +49,7 @@ impl VideoEncoder for VaapiEncoder {
         let encoder = Self::create_encoder(width, height, encoder_name, &quality)?;
         let video_ring_buffer = HeapRb::<(i64, VideoFrameData)>::new(120);
         let (video_ring_sender, video_ring_receiver) = video_ring_buffer.split();
+        let filter_graph = Some(Self::create_filter_graph(&encoder, width, height)?);
 
         Ok(Self {
             encoder: Some(encoder),
@@ -55,110 +59,198 @@ impl VideoEncoder for VaapiEncoder {
             quality,
             encoded_frame_recv: Some(video_ring_receiver),
             encoded_frame_sender: Some(video_ring_sender),
+            filter_graph,
         })
     }
 
     fn process(&mut self, frame: &crate::RawVideoFrame) -> Result<(), ffmpeg::Error> {
         if let Some(ref mut encoder) = self.encoder {
-            // Convert BGRA to NV12 then transfer it to a hw frame and send it to the
-            // encoder
-            //
-            // TODO: Figure out how to use DMA BUF so we don't need to do this to optimize
-            // performance. This function takes 15ms on average to run which is very close to being
-            // over the 1/60 target fps
-            SCALER.with(|scaler_cell| {
-                let mut scaler = scaler_cell.borrow_mut();
-                if scaler.is_none() {
-                    *scaler = Some(
-                        Scaler::get(
-                            ffmpeg::format::Pixel::BGRA,
-                            encoder.width(),
-                            encoder.height(),
-                            ffmpeg::format::Pixel::NV12,
-                            encoder.width(),
-                            encoder.height(),
-                            Flags::BILINEAR,
-                        )
-                        .unwrap(),
-                    );
-                }
+            if let Some(fd) = frame.dmabuf_fd {
+                log::debug!(
+                    "DMA Frame with fd: {}, size: {}, offset: {}, stride: {}",
+                    fd,
+                    frame.size,
+                    frame.offset,
+                    frame.stride
+                );
 
-                let mut src_frame = ffmpeg::util::frame::video::Video::new(
-                    ffmpeg_next::format::Pixel::BGRA,
+                let mut drm_frame = ffmpeg::util::frame::Video::new(
+                    ffmpeg_next::format::Pixel::DRM_PRIME,
                     encoder.width(),
                     encoder.height(),
                 );
-                src_frame.data_mut(0).copy_from_slice(frame.get_bytes());
-
-                let mut dst_frame = ffmpeg::util::frame::Video::new(
-                    ffmpeg::format::Pixel::NV12,
-                    encoder.width(),
-                    encoder.height(),
-                );
-
-                scaler
-                    .as_mut()
-                    .unwrap()
-                    .run(&src_frame, &mut dst_frame)
-                    .unwrap();
-
-                let mut vaapi_frame = ffmpeg::util::frame::video::Video::new(
-                    encoder.format(),
-                    encoder.width(),
-                    encoder.height(),
-                );
-
                 unsafe {
-                    let err = av_hwframe_get_buffer(
-                        (*encoder.as_ptr()).hw_frames_ctx,
-                        vaapi_frame.as_mut_ptr(),
+                    // Create DRM descriptor that points to the DMA buffer
+                    let drm_desc =
+                        Box::into_raw(Box::new(std::mem::zeroed::<AVDRMFrameDescriptor>()));
+
+                    (*drm_desc).nb_objects = 1;
+                    (*drm_desc).objects[0].fd = fd;
+                    (*drm_desc).objects[0].size = 0;
+                    (*drm_desc).objects[0].format_modifier = 0;
+
+                    (*drm_desc).nb_layers = 1;
+                    (*drm_desc).layers[0].format = DrmFourcc::Argb8888 as u32;
+                    (*drm_desc).layers[0].nb_planes = 1;
+                    (*drm_desc).layers[0].planes[0].object_index = 0;
+                    (*drm_desc).layers[0].planes[0].offset = frame.offset as isize;
+                    (*drm_desc).layers[0].planes[0].pitch = frame.stride as isize;
+
+                    // Attach descriptor to frame
+                    (*drm_frame.as_mut_ptr()).data[0] = drm_desc as *mut u8;
+                    (*drm_frame.as_mut_ptr()).buf[0] = av_buffer_create(
+                        drm_desc as *mut u8,
+                        std::mem::size_of::<AVDRMFrameDescriptor>(),
+                        Some(av_buffer_default_free),
+                        null_mut(),
                         0,
                     );
 
-                    if err < 0 {
-                        error!("Error getting the hw frame buffer: {:?}", err);
-                    }
-
-                    let err =
-                        av_hwframe_transfer_data(vaapi_frame.as_mut_ptr(), dst_frame.as_ptr(), 0);
-
-                    if err < 0 {
-                        error!("Error transferring the frame data to hw frame: {:?}", err);
-                    }
+                    (*drm_frame.as_mut_ptr()).hw_frames_ctx =
+                        av_buffer_ref((*encoder.as_ptr()).hw_frames_ctx);
                 }
 
-                vaapi_frame.set_pts(Some(*frame.get_timestamp()));
+                drm_frame.set_pts(Some(*frame.get_timestamp()));
+                self.filter_graph
+                    .as_mut()
+                    .unwrap()
+                    .get("in")
+                    .unwrap()
+                    .source()
+                    .add(&drm_frame)
+                    .unwrap();
 
-                encoder.send_frame(&vaapi_frame).unwrap();
+                let mut filtered = ffmpeg::util::frame::Video::empty();
+                if self
+                    .filter_graph
+                    .as_mut()
+                    .unwrap()
+                    .get("out")
+                    .unwrap()
+                    .sink()
+                    .frame(&mut filtered)
+                    .is_ok()
+                {
+                    encoder.send_frame(&filtered)?;
+                }
+            } else {
+                // Convert BGRA to NV12 then transfer it to a hw frame and send it to the
+                // encoder
+                //
+                // TODO: deprecate this path?
+                SCALER.with(|scaler_cell| {
+                    let mut scaler = scaler_cell.borrow_mut();
+                    if scaler.is_none() {
+                        *scaler = Some(
+                            Scaler::get(
+                                ffmpeg::format::Pixel::BGRA,
+                                encoder.width(),
+                                encoder.height(),
+                                ffmpeg::format::Pixel::NV12,
+                                encoder.width(),
+                                encoder.height(),
+                                Flags::BILINEAR,
+                            )
+                            .unwrap(),
+                        );
+                    }
 
-                let mut packet = ffmpeg::codec::packet::Packet::empty();
-                if encoder.receive_packet(&mut packet).is_ok() {
-                    if let Some(data) = packet.data() {
-                        if let Some(ref mut sender) = self.encoded_frame_sender {
-                            if sender
-                                .try_push((
-                                    packet.dts().unwrap_or(0),
-                                    VideoFrameData::new(
-                                        data.to_vec(),
-                                        packet.is_key(),
-                                        packet.pts().unwrap_or(0),
-                                    ),
-                                ))
-                                .is_err()
-                            {
-                                log::error!("Could not send encoded packet to the ringbuf");
-                            }
+                    let mut src_frame = ffmpeg::util::frame::video::Video::new(
+                        ffmpeg_next::format::Pixel::BGRA,
+                        encoder.width(),
+                        encoder.height(),
+                    );
+                    src_frame.data_mut(0).copy_from_slice(frame.get_bytes());
+
+                    let mut dst_frame = ffmpeg::util::frame::Video::new(
+                        ffmpeg::format::Pixel::NV12,
+                        encoder.width(),
+                        encoder.height(),
+                    );
+
+                    scaler
+                        .as_mut()
+                        .unwrap()
+                        .run(&src_frame, &mut dst_frame)
+                        .unwrap();
+
+                    let mut vaapi_frame = ffmpeg::util::frame::video::Video::new(
+                        encoder.format(),
+                        encoder.width(),
+                        encoder.height(),
+                    );
+
+                    unsafe {
+                        let err = av_hwframe_get_buffer(
+                            (*encoder.as_ptr()).hw_frames_ctx,
+                            vaapi_frame.as_mut_ptr(),
+                            0,
+                        );
+
+                        if err < 0 {
+                            error!("Error getting the hw frame buffer: {:?}", err);
                         }
-                    };
-                }
-            });
+
+                        let err = av_hwframe_transfer_data(
+                            vaapi_frame.as_mut_ptr(),
+                            dst_frame.as_ptr(),
+                            0,
+                        );
+
+                        if err < 0 {
+                            error!("Error transferring the frame data to hw frame: {:?}", err);
+                        }
+                    }
+
+                    vaapi_frame.set_pts(Some(*frame.get_timestamp()));
+
+                    encoder.send_frame(&vaapi_frame).unwrap();
+                });
+            }
+
+            let mut packet = ffmpeg::codec::packet::Packet::empty();
+            if encoder.receive_packet(&mut packet).is_ok() {
+                if let Some(data) = packet.data() {
+                    if let Some(ref mut sender) = self.encoded_frame_sender {
+                        if sender
+                            .try_push((
+                                packet.dts().unwrap_or(0),
+                                VideoFrameData::new(
+                                    data.to_vec(),
+                                    packet.is_key(),
+                                    packet.pts().unwrap_or(0),
+                                ),
+                            ))
+                            .is_err()
+                        {
+                            log::error!("Could not send encoded packet to the ringbuf");
+                        }
+                    }
+                };
+            }
         }
         Ok(())
     }
 
-    /// Drain the encoder of any remaining frames it is processing
+    /// Drain the filter graph and encoder of any remaining frames it is processing
     fn drain(&mut self) -> Result<(), ffmpeg::Error> {
         if let Some(ref mut encoder) = self.encoder {
+            // Drain the filter graph
+            let mut filtered = ffmpeg::util::frame::Video::empty();
+            while self
+                .filter_graph
+                .as_mut()
+                .unwrap()
+                .get("out")
+                .unwrap()
+                .sink()
+                .frame(&mut filtered)
+                .is_ok()
+            {
+                encoder.send_frame(&filtered)?;
+            }
+
+            // Drain encoder
             encoder.send_eof()?;
             let mut packet = ffmpeg::codec::packet::Packet::empty();
             while encoder.receive_packet(&mut packet).is_ok() {
@@ -187,12 +279,13 @@ impl VideoEncoder for VaapiEncoder {
 
     fn reset(&mut self) -> anyhow::Result<()> {
         self.drop_encoder();
-        self.encoder = Some(Self::create_encoder(
-            self.width,
-            self.height,
-            &self.encoder_name,
-            &self.quality,
-        )?);
+        let new_encoder =
+            Self::create_encoder(self.width, self.height, &self.encoder_name, &self.quality)?;
+
+        let new_filter_graph = Self::create_filter_graph(&new_encoder, self.width, self.height)?;
+
+        self.encoder = Some(new_encoder);
+        self.filter_graph = Some(new_filter_graph);
         Ok(())
     }
 
@@ -202,6 +295,7 @@ impl VideoEncoder for VaapiEncoder {
 
     fn drop_encoder(&mut self) {
         self.encoder.take();
+        self.filter_graph.take();
     }
 
     fn take_encoded_recv(&mut self) -> Option<HeapCons<(i64, VideoFrameData)>> {
@@ -325,6 +419,50 @@ impl VaapiEncoder {
             }
         }
         opts
+    }
+
+    fn create_filter_graph(
+        encoder: &ffmpeg::codec::encoder::Video,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<ffmpeg::filter::Graph> {
+        let mut graph = ffmpeg::filter::Graph::new();
+
+        let args = format!(
+            "video_size={}x{}:pix_fmt=bgra:time_base=1/1000000",
+            width, height
+        );
+
+        let mut input = graph.add(&ffmpeg::filter::find("buffer").unwrap(), "in", &args)?;
+
+        let mut hwmap = graph.add(
+            &ffmpeg::filter::find("hwmap").unwrap(),
+            "hwmap",
+            "mode=read+write:derive_device=vaapi",
+        )?;
+
+        let scale_args = format!("w={}:h={}:format=nv12:out_range=tv", width, height);
+        let mut scale = graph.add(
+            &ffmpeg::filter::find("scale_vaapi").unwrap(),
+            "scale",
+            &scale_args,
+        )?;
+
+        let mut out = graph.add(&ffmpeg::filter::find("buffersink").unwrap(), "out", "")?;
+        unsafe {
+            let dev = (*encoder.as_ptr()).hw_device_ctx;
+
+            (*hwmap.as_mut_ptr()).hw_device_ctx = av_buffer_ref(dev);
+        }
+
+        input.link(0, &mut hwmap, 0);
+        hwmap.link(0, &mut scale, 0);
+        scale.link(0, &mut out, 0);
+
+        graph.validate()?;
+        log::trace!("Graph\n{}", graph.dump());
+
+        Ok(graph)
     }
 }
 
