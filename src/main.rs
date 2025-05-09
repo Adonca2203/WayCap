@@ -14,6 +14,8 @@ mod modes;
 mod pw_capture;
 mod waycap;
 
+use std::os::fd::RawFd;
+
 use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
 use encoders::{
@@ -51,6 +53,10 @@ impl RawAudioFrame {
 pub struct RawVideoFrame {
     bytes: Vec<u8>,
     timestamp: i64,
+    dmabuf_fd: Option<RawFd>,
+    stride: i32,
+    offset: u32,
+    size: u32,
 }
 
 impl RawVideoFrame {

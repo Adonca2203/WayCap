@@ -29,7 +29,7 @@ pub struct WayCap<M: AppMode> {
 
 impl<M: AppMode> WayCap<M> {
     pub async fn new(mut mode: M, config: AppConfig) -> Result<Self> {
-        simple_logging::log_to_file("logs.txt", log::LevelFilter::Trace)?;
+        simple_logging::log_to_file("logs.txt", log::LevelFilter::Debug)?;
         let current_time = SystemTime::now();
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
