@@ -1,42 +1,13 @@
 use std::collections::BTreeMap;
 
-/// Represents a single encoded video frame
-#[derive(Clone, Debug)]
-pub struct VideoFrameData {
-    frame_bytes: Vec<u8>,
-    pts: i64,
-    is_key: bool,
-}
-
-impl VideoFrameData {
-    pub fn new(frame_bytes: Vec<u8>, is_key: bool, pts: i64) -> Self {
-        Self {
-            frame_bytes,
-            is_key,
-            pts,
-        }
-    }
-
-    pub fn get_raw_bytes(&self) -> &Vec<u8> {
-        &self.frame_bytes
-    }
-
-    pub fn get_pts(&self) -> &i64 {
-        &self.pts
-    }
-
-    pub fn is_key(&self) -> &bool {
-        &self.is_key
-    }
-}
+use waycap_rs::types::video_frame::EncodedVideoFrame;
 
 /// Rolling buffer which holds up to the last `max_time` seconds of video frames.
 ///
 /// The buffer is ordered by decoding timestamp (DTS) and maintains complete GOPs (groups of pictures),
 /// ensuring that no partial GOPs are kept when trimming for ease of muxing and playback.
-#[derive(Clone)]
 pub struct ShadowCaptureVideoBuffer {
-    frames: BTreeMap<i64, VideoFrameData>,
+    frames: BTreeMap<i64, EncodedVideoFrame>,
 
     /// Maximum duration (in seconds) that the buffer should retain.
     /// Once the difference between the newest and oldest frame exceeds this, older GOPs are trimmed.
@@ -70,8 +41,8 @@ impl ShadowCaptureVideoBuffer {
     ///
     /// * `timestamp` - The decoding timestamp (DTS) of the frame.
     /// * `frame` - A [`VideoFrameData`] representing an encoded frame.
-    pub fn insert(&mut self, timestamp: i64, frame: VideoFrameData) {
-        if frame.is_key {
+    pub fn insert(&mut self, timestamp: i64, frame: EncodedVideoFrame) {
+        if frame.is_keyframe {
             self.key_frame_keys.push(timestamp);
         }
 
@@ -136,7 +107,7 @@ impl ShadowCaptureVideoBuffer {
         self.key_frame_keys.remove(0);
     }
 
-    pub fn get_frames(&self) -> &BTreeMap<i64, VideoFrameData> {
+    pub fn get_frames(&self) -> &BTreeMap<i64, EncodedVideoFrame> {
         &self.frames
     }
 

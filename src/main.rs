@@ -11,63 +11,19 @@ mod application_config;
 mod dbus;
 mod encoders;
 mod modes;
-mod pw_capture;
 mod waycap;
-
-use std::os::fd::RawFd;
 
 use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
-use encoders::{
-    audio_encoder::{AudioEncoderImpl, FfmpegAudioEncoder},
-    buffer::{ShadowCaptureAudioBuffer, ShadowCaptureVideoBuffer},
-    video_encoder::ONE_MICROS,
-};
+use encoders::buffer::{ShadowCaptureAudioBuffer, ShadowCaptureVideoBuffer};
 use ffmpeg_next::{self as ffmpeg};
 use modes::shadow_cap::ShadowCapMode;
 use pipewire::{self as pw};
 use waycap::WayCap;
+use waycap_rs::Capture;
 
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
-const TARGET_FPS: usize = 60;
-const FRAME_INTERVAL: u64 = (ONE_MICROS / TARGET_FPS) as u64;
-
-#[derive(Debug)]
-pub struct RawAudioFrame {
-    samples: Vec<f32>,
-    timestamp: i64,
-}
-
-impl RawAudioFrame {
-    pub fn get_samples_mut(&mut self) -> &mut Vec<f32> {
-        &mut self.samples
-    }
-
-    pub fn get_samples(&mut self) -> &Vec<f32> {
-        &self.samples
-    }
-}
-
-#[derive(Debug)]
-pub struct RawVideoFrame {
-    bytes: Vec<u8>,
-    timestamp: i64,
-    dmabuf_fd: Option<RawFd>,
-    stride: i32,
-    offset: u32,
-    size: u32,
-}
-
-impl RawVideoFrame {
-    pub fn get_bytes(&self) -> &Vec<u8> {
-        &self.bytes
-    }
-
-    pub fn get_timestamp(&self) -> &i64 {
-        &self.timestamp
-    }
-}
 
 pub struct Terminate;
 
@@ -89,27 +45,28 @@ async fn main() -> Result<(), Error> {
 fn save_buffer(
     filename: &str,
     video_buffer: &ShadowCaptureVideoBuffer,
-    video_encoder: &ffmpeg::codec::encoder::Video,
     audio_buffer: &ShadowCaptureAudioBuffer,
-    audio_encoder: &FfmpegAudioEncoder,
+    capture: &Capture,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
 
-    let video_codec = video_encoder
-        .codec()
-        .context("Could not find expected video codec")?;
+    capture.with_video_encoder(|enc| {
+        if let Some(encoder) = enc {
+            let video_codec = encoder.codec().unwrap();
+            let mut video_stream = output.add_stream(video_codec).unwrap();
+            video_stream.set_time_base(encoder.time_base());
+            video_stream.set_parameters(encoder);
+        }
+    });
 
-    let mut video_stream = output.add_stream(video_codec)?;
-    video_stream.set_time_base(video_encoder.time_base());
-    video_stream.set_parameters(video_encoder);
-
-    let audio_codec = audio_encoder
-        .codec()
-        .context("Could not find expected audio codec")?;
-
-    let mut audio_stream = output.add_stream(audio_codec)?;
-    audio_stream.set_time_base(audio_encoder.time_base());
-    audio_stream.set_parameters(audio_encoder.as_ref());
+    capture.with_audio_encoder(|enc| {
+        if let Some(encoder) = enc {
+            let audio_codec = encoder.codec().unwrap();
+            let mut audio_stream = output.add_stream(audio_codec).unwrap();
+            audio_stream.set_time_base(encoder.time_base());
+            audio_stream.set_parameters(encoder);
+        }
+    });
 
     output.write_header()?;
 
@@ -127,24 +84,24 @@ fn save_buffer(
     for (dts, frame_data) in video_buffer.get_frames().range(..=last_keyframe) {
         // If video starts before audio try and catch up as much as possible
         // (At worst a 20ms gap)
-        if &audio_capture_timestamps[0] > frame_data.get_pts() && !*frame_data.is_key() {
+        if audio_capture_timestamps[0] > frame_data.pts && !frame_data.is_keyframe {
             log::debug!(
                 "Skipping Video Frame Captured at: {:?}, DTS: {:?}",
-                frame_data.get_pts(),
+                frame_data.pts,
                 dts,
             );
             continue;
         }
 
         if !first_offset {
-            first_pts_offset = *frame_data.get_pts();
+            first_pts_offset = frame_data.pts;
             first_offset = true;
         }
 
-        let pts_offset = frame_data.get_pts() - first_pts_offset;
+        let pts_offset = frame_data.pts - first_pts_offset;
         let dts_offset = dts - first_pts_offset;
 
-        let mut packet = ffmpeg::codec::packet::Packet::copy(frame_data.get_raw_bytes());
+        let mut packet = ffmpeg::codec::packet::Packet::copy(&frame_data.data);
         packet.set_pts(Some(pts_offset));
         packet.set_dts(Some(dts_offset));
 
@@ -153,7 +110,7 @@ fn save_buffer(
         packet
             .write_interleaved(&mut output)
             .expect("Could not write video interleaved");
-        newest_video_pts = *frame_data.get_pts();
+        newest_video_pts = frame_data.pts;
     }
     log::debug!("VIDEO SAVE END");
 
