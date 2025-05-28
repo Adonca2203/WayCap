@@ -360,12 +360,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "325918d6fe32f23b19878fe4b34794ae41fc19ddbe53b10571a4874d44ffd39b"
 
 [[package]]
-name = "c_str_macro"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6d44951c469019e225e7667d799052f67fb8ea358d086878f3582b39f0de5e5"
-
-[[package]]
 name = "cc"
 version = "1.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2107,14 +2101,10 @@ name = "waycap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytemuck",
- "c_str_macro",
  "chrono",
  "config",
  "directories",
- "drm-fourcc",
  "ffmpeg-next",
- "libc",
  "log",
  "pipewire",
  "ringbuf",

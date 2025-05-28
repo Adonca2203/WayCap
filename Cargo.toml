@@ -5,14 +5,10 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.95"
-bytemuck = "1.21.0"
-c_str_macro = "1.0.3"
 chrono = "0.4.39"
 config = "0.15.11"
 directories = "6.0.0"
-drm-fourcc = "2.2.0"
 ffmpeg-next = { version = "7.1.0", features = ["codec", "format"] }
-libc = "0.2.172"
 log = "0.4.25"
 pipewire = "0.8.0"
 ringbuf = "0.4.8"
