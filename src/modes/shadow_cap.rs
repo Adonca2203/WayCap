@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use ringbuf::{consumer::Consumer, HeapCons};
+use crossbeam::channel::Receiver;
 use tokio::sync::Mutex;
 use waycap_rs::types::{audio_frame::EncodedAudioFrame, video_frame::EncodedVideoFrame};
 
@@ -93,7 +93,7 @@ impl ShadowCapMode {
     }
 
     fn create_shadow_video_worker(
-        mut recv: HeapCons<EncodedVideoFrame>,
+        recv: Receiver<EncodedVideoFrame>,
         buffer: Arc<Mutex<ShadowCaptureVideoBuffer>>,
         stop: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<()> {
@@ -102,18 +102,18 @@ impl ShadowCapMode {
                 break;
             }
 
-            while let Some(encoded_frame) = recv.try_pop() {
+            while let Ok(encoded_frame) = recv.try_recv() {
                 buffer
                     .blocking_lock()
                     .insert(encoded_frame.dts, encoded_frame);
             }
 
-            std::thread::sleep(Duration::from_nanos(100));
+            std::thread::sleep(Duration::from_millis(100));
         })
     }
 
     fn create_shadow_audio_worker(
-        mut recv: HeapCons<EncodedAudioFrame>,
+        recv: Receiver<EncodedAudioFrame>,
         audio_buffer: Arc<Mutex<ShadowCaptureAudioBuffer>>,
         stop: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<()> {
@@ -122,13 +122,13 @@ impl ShadowCapMode {
                 break;
             }
 
-            while let Some(encoded_frame) = recv.try_pop() {
+            while let Ok(encoded_frame) = recv.try_recv() {
                 let mut audio_buf = audio_buffer.blocking_lock();
                 audio_buf.insert_capture_time(encoded_frame.timestamp);
                 audio_buf.insert(encoded_frame.pts, encoded_frame.data);
             }
 
-            std::thread::sleep(Duration::from_nanos(100));
+            std::thread::sleep(Duration::from_millis(100));
         })
     }
 }
