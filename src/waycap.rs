@@ -19,7 +19,7 @@ pub struct WayCap<M: AppMode> {
 }
 
 impl<M: AppMode> WayCap<M> {
-    pub async fn new(mut mode: M, config: AppConfig) -> Result<Self> {
+    pub async fn new(mut mode: M, _config: AppConfig) -> Result<Self> {
         simple_logging::log_to_file("logs.txt", log::LevelFilter::Info)?;
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -41,14 +41,6 @@ impl<M: AppMode> WayCap<M> {
             .with_audio()
             .with_quality_preset(waycap_rs::types::config::QualityPreset::Medium)
             .with_cursor_shown()
-            .with_video_encoder(match config.encoder {
-                crate::application_config::EncoderToUse::H264Nvenc => {
-                    waycap_rs::types::config::VideoEncoder::H264Nvenc
-                }
-                crate::application_config::EncoderToUse::H264Vaapi => {
-                    waycap_rs::types::config::VideoEncoder::H264Vaapi
-                }
-            })
             .with_audio_encoder(waycap_rs::types::config::AudioEncoder::Opus)
             .build()?;
 
@@ -91,13 +83,13 @@ impl<M: AppMode> WayCap<M> {
 
         if let Some(conn) = self.dbus_conn.take() {
             if let Err(e) = conn.close().await {
-                log::error!("Error closing dbus connection: {:?}", e);
+                log::error!("Error closing dbus connection: {e:?}");
             }
         }
 
         for handle in self.context.join_handles.drain(..) {
             if let Err(e) = handle.join() {
-                log::error!("Error shutting down a worker handle: {:?}", e);
+                log::error!("Error shutting down a worker handle: {e:?}");
             }
         }
 
