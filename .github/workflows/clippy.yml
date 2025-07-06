@@ -2,62 +2,149 @@ name: Clippy & Test Check
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
-jobs:
-  setup:
-    name: Shared Setup (Caching)
-    runs-on: ubuntu-latest
-    outputs:
-      cache-hit: ${{ steps.cache.outputs.cache-hit }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CUDA_VERSION: '12.5.0'
 
-      - name: Cache cargo registry and target dir
-        id: cache
-        uses: actions/cache@v3
+jobs:
+  setup-cuda:
+    name: Setup CUDA Toolkit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      cuda-cache-hit: ${{ steps.cuda-cache.outputs.cache-hit }}
+    steps:
+      - name: Cache CUDA installation
+        id: cuda-cache
+        uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          path: /usr/local/cuda-*
+          key: cuda-${{ env.CUDA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            cuda-${{ env.CUDA_VERSION }}-${{ runner.os }}-
+
+      - name: Install CUDA Toolkit
+        if: steps.cuda-cache.outputs.cache-hit != 'true'
+        id: install_cuda
+        uses: Jimver/cuda-toolkit@v0.2.24
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: 'local'
+          use-github-cache: false
+
+      - name: Archive CUDA installation with progress
+        run: |
+          CUDA_VER_SHORT=$(echo "${CUDA_VERSION}" | cut -d '.' -f1,2)
+          CUDA_DIR="/usr/local/cuda-${CUDA_VER_SHORT}"
+          echo "Archiving CUDA from $CUDA_DIR"
+          
+          if [ ! -d "$CUDA_DIR" ]; then
+            echo "CUDA directory not found at $CUDA_DIR"
+            ls -la /usr/local/cuda*
+            exit 1
+          fi
+          
+          sudo tar -C /usr/local \
+            --exclude='*.a' \
+            --exclude='doc' \
+            --exclude='samples' \
+            --checkpoint=1000 \
+            --checkpoint-action=echo='Archived %u records' \
+            -czf /tmp/cuda.tar.gz "cuda-${CUDA_VER_SHORT}"
+          
+          # Show tarball size
+          ls -lh /tmp/cuda.tar.gz
+        env:
+          CUDA_VERSION: ${{ env.CUDA_VERSION }}
+
+      - name: Upload CUDA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-toolkit-${{ env.CUDA_VERSION }}
+          path: /tmp/cuda.tar.gz
+          retention-days: 7
+          compression-level: 0
+
+  fmt:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - run: cargo fmt --all -- --check
 
   clippy:
-    name: Run Clippy
+    name: Clippy Linting
     runs-on: ubuntu-latest
-    needs: setup
-
+    needs: [setup-cuda]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/cache@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
             ${{ runner.os }}-cargo-
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Download CUDA artifact
+        uses: actions/download-artifact@v4
         with:
-          toolchain: stable
-          components: clippy
-          profile: minimal
-          override: true
+          name: cuda-toolkit-${{ env.CUDA_VERSION }}
+          path: /tmp
+
+      - name: Extract CUDA with progress
+        run: |
+          echo "Extracting CUDA toolkit..."
+          sudo tar -xzf /tmp/cuda.tar.gz -C /usr/local \
+            --checkpoint=1000 \
+            --checkpoint-action=echo='Extracted %u records'
+          
+          # Verify extraction
+          CUDA_VER_SHORT=$(echo "${CUDA_VERSION}" | cut -d '.' -f1,2)
+          ls -la /usr/local/cuda-${CUDA_VER_SHORT}/bin/nvcc
+        env:
+          CUDA_VERSION: ${{ env.CUDA_VERSION }}
+
+      - name: Setup CUDA environment variables
+        run: |
+          CUDA_VER_SHORT=$(echo "${CUDA_VERSION}" | cut -d '.' -f1,2)
+          CUDA_HOME="/usr/local/cuda-${CUDA_VER_SHORT}"
+          
+          echo "CUDA_HOME=${CUDA_HOME}" >> $GITHUB_ENV
+          echo "PATH=${CUDA_HOME}/bin:$PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${CUDA_HOME}/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          
+          # Also add to current session for verification
+          export PATH="${CUDA_HOME}/bin:$PATH"
+          export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:$LD_LIBRARY_PATH"
+        env:
+          CUDA_VERSION: ${{ env.CUDA_VERSION }}
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            nvidia-driver-535 \
+            libnvidia-compute-535 \
             libdbus-1-dev \
             libpipewire-0.3-dev \
             libavutil-dev \
@@ -66,40 +153,79 @@ jobs:
             libswscale-dev \
             libavdevice-dev \
             libavfilter-dev \
+            libwayland-dev \
+            libwayland-client0 \
+            wayland-protocols \
             pkg-config
 
-      - name: Run cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Verify CUDA installation
+        run: |
+          nvcc --version
+
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
-    name: Run Tests
+    name: Unit Tests
     runs-on: ubuntu-latest
-    needs: setup
-
+    needs: [setup-cuda]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/cache@v3
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Download CUDA artifact
+        uses: actions/download-artifact@v4
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
+          name: cuda-toolkit-${{ env.CUDA_VERSION }}
+          path: /tmp
+
+      - name: Extract CUDA with progress
+        run: |
+          echo "Extracting CUDA toolkit..."
+          sudo tar -xzf /tmp/cuda.tar.gz -C /usr/local \
+            --checkpoint=1000 \
+            --checkpoint-action=echo='Extracted %u records'
+          
+          # Verify extraction
+          CUDA_VER_SHORT=$(echo "${CUDA_VERSION}" | cut -d '.' -f1,2)
+          ls -la /usr/local/cuda-${CUDA_VER_SHORT}/bin/nvcc
+        env:
+          CUDA_VERSION: ${{ env.CUDA_VERSION }}
+
+      - name: Setup CUDA environment variables
+        run: |
+          CUDA_VER_SHORT=$(echo "${CUDA_VERSION}" | cut -d '.' -f1,2)
+          CUDA_HOME="/usr/local/cuda-${CUDA_VER_SHORT}"
+          
+          echo "CUDA_HOME=${CUDA_HOME}" >> $GITHUB_ENV
+          echo "PATH=${CUDA_HOME}/bin:$PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${CUDA_HOME}/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          
+          # Also add to current session for verification
+          export PATH="${CUDA_HOME}/bin:$PATH"
+          export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:$LD_LIBRARY_PATH"
+        env:
+          CUDA_VERSION: ${{ env.CUDA_VERSION }}
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            nvidia-driver-535 \
+            libnvidia-compute-535 \
             libdbus-1-dev \
             libpipewire-0.3-dev \
             libavutil-dev \
@@ -108,44 +234,13 @@ jobs:
             libswscale-dev \
             libavdevice-dev \
             libavfilter-dev \
+            libwayland-dev \
+            libwayland-client0 \
+            wayland-protocols \
             pkg-config
 
-      - name: Run tests
-        run: cargo test
-
-  rust-fmt:
-    name: Run rustfmt
-    runs-on: ubuntu-latest
-    needs: setup
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-    
-      - name: Install rustfmt
-        run: rustup component add rustfmt
-
-      - name: Run rustfmt
-        run: cargo fmt -- --check
-
-      - name: Fail if rustfmt is not correct
-        if: failure()
+      - name: Verify CUDA installation
         run: |
-          echo "Code is not formatted. Please run 'cargo fmt' and commit the changes."
-          exit 1
+          nvcc --version
+
+      - run: cargo test

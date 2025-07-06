@@ -32,7 +32,7 @@ async fn main() -> Result<(), Error> {
     pw::init();
     ffmpeg::init()?;
     let config = load_or_create_config();
-    log::debug!("Config: {:?}", config);
+    log::debug!("Config: {config:?}");
     let mode = ShadowCapMode::new(config.max_seconds).await?;
 
     let mut app = WayCap::new(mode, config).await?;
