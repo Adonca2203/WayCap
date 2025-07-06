@@ -50,12 +50,13 @@ jobs:
           fi
           
           # Create tarball with progress and better compression
-          sudo tar -C /usr/local -czf /tmp/cuda.tar.gz "cuda-${CUDA_VER_SHORT}" \
-            --checkpoint=1000 \
-            --checkpoint-action=echo='Archived %u records' \
+          sudo tar -C /usr/local \
             --exclude='*.a' \
             --exclude='doc' \
-            --exclude='samples'
+            --exclude='samples' \
+            --checkpoint=1000 \
+            --checkpoint-action=echo='Archived %u records' \
+            -czf /tmp/cuda.tar.gz "cuda-${CUDA_VER_SHORT}"
           
           # Show tarball size
           ls -lh /tmp/cuda.tar.gz
