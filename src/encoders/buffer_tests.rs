@@ -95,12 +95,7 @@ fn test_video_buffer_stress_realistic() {
 
             buffer.insert(
                 dts,
-                new_video_frame(
-                    vec![1, 2, 3],
-                    current_pts,
-                    is_keyframe,
-                    current_pts,
-                ),
+                new_video_frame(vec![1, 2, 3], current_pts, is_keyframe, current_pts),
             );
 
             dts += frame_duration_us;
@@ -118,7 +113,7 @@ fn test_video_buffer_stress_realistic() {
             "Buffer duration: {:.2} seconds",
             duration_us as f64 / 1_000_000.0
         );
-        assert!(duration_us >= 4_400_000 && duration_us <= 4_600_000); // Should be close to max (~4.5 seconds)
+        assert!((4_400_000..4_600_000).contains(&duration_us)); // Should be close to max (~4.5 seconds)
     }
 
     assert!(buffer.get_last_gop_start().is_some());

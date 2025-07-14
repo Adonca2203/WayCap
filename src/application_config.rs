@@ -90,6 +90,11 @@ impl TryFrom<AppConfigDbus> for AppConfig {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, PartialEq)]
+pub enum AppModeDbus {
+    Shadow,
+}
+
 pub fn load_or_create_config() -> AppConfig {
     let mut settings = Config::builder();
 

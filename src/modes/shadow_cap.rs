@@ -1,5 +1,6 @@
 use std::{
     sync::{atomic::AtomicBool, Arc},
+    thread::JoinHandle,
     time::Duration,
 };
 
@@ -18,30 +19,31 @@ use super::AppMode;
 pub struct ShadowCapMode {
     video_buffer: Arc<Mutex<ShadowCaptureVideoBuffer>>,
     audio_buffer: Arc<Mutex<ShadowCaptureAudioBuffer>>,
+    shadow_workers: Vec<JoinHandle<()>>,
 }
 
 impl AppMode for ShadowCapMode {
     async fn init(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
         log::debug!("Initializing context for Shadow Capture Mode");
-
-        let video_owned_recv = ctx.capture.take_video_receiver();
+        let video_owned_recv = ctx.capture.get_video_receiver();
 
         let shadow_worker = Self::create_shadow_video_worker(
             video_owned_recv,
             Arc::clone(&self.video_buffer),
             Arc::clone(&ctx.stop),
         );
-        ctx.join_handles.push(shadow_worker);
+        self.shadow_workers.push(shadow_worker);
 
-        let audio_owned_recv = ctx.capture.take_audio_receiver()?;
+        let audio_owned_recv = ctx.capture.get_audio_receiver()?;
 
         let audio_shadow_worker = Self::create_shadow_audio_worker(
             audio_owned_recv,
             Arc::clone(&self.audio_buffer),
             Arc::clone(&ctx.stop),
         );
-        ctx.join_handles.push(audio_shadow_worker);
+        self.shadow_workers.push(audio_shadow_worker);
 
+        ctx.capture.start()?;
         log::debug!("Successfully initialized Shadow Capture Mode");
         Ok(())
     }
@@ -71,8 +73,22 @@ impl AppMode for ShadowCapMode {
     async fn on_shutdown(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
         log::info!("Shutting down");
         // Stop processing new frames and exit worker threads
-        ctx.saving.store(true, std::sync::atomic::Ordering::Release);
         ctx.stop.store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
+    async fn on_exit(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
+        // Stop worker threads and wait for them to exit
+        ctx.stop.store(true, std::sync::atomic::Ordering::Release);
+        ctx.capture.pause()?;
+        for worker in self.shadow_workers.drain(..) {
+            match worker.join() {
+                Ok(_) => {}
+                Err(e) => {
+                    log::error!("Error in shadow worker thread: {e:?}");
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -92,6 +108,7 @@ impl ShadowCapMode {
             audio_buffer: Arc::new(Mutex::new(ShadowCaptureAudioBuffer::new(
                 actual_max as usize,
             ))),
+            shadow_workers: Vec::new(),
         })
     }
 
