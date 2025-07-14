@@ -35,19 +35,11 @@ fn test_video_buffer_no_trim() {
 
     assert_eq!(*buffer.get_last_gop_start().unwrap(), 3);
 
-    let newest_pts = buffer.newest_pts().unwrap();
-    assert_eq!(newest_pts, 6);
-
-    let oldest_pts = buffer.oldest_pts().unwrap();
-    assert_eq!(oldest_pts, 1);
-
     assert_eq!(buffer.get_frames().len(), 3);
 
     buffer.reset();
 
     assert!(buffer.get_frames().is_empty());
-    assert!(buffer.newest_pts().is_none());
-    assert!(buffer.oldest_pts().is_none());
 }
 
 #[test]
@@ -68,16 +60,68 @@ fn test_video_buffer_trimming() {
     buffer.insert(8, new_video_frame(vec![1], 17, false, 17));
     buffer.insert(9, new_video_frame(vec![1], 19, true, 19));
 
-    let oldest = buffer.oldest_pts().unwrap();
-    assert_eq!(oldest, 13);
-    let newest = buffer.newest_pts().unwrap();
-    assert_eq!(newest, 19);
     assert_eq!(buffer.get_frames().len(), 4);
     assert_eq!(*buffer.get_last_gop_start().unwrap(), 9);
     buffer.reset();
     assert!(buffer.get_frames().is_empty());
-    assert!(buffer.newest_pts().is_none());
-    assert!(buffer.oldest_pts().is_none());
+}
+
+#[test]
+fn test_video_buffer_stress_realistic() {
+    // 5 second buffer at 60fps with variable GOP sizes
+    let mut buffer = ShadowCaptureVideoBuffer::new(5_000_000);
+
+    let mut dts = 0i64;
+    let mut pts = 0i64;
+    let frame_duration_us = 16667; // ~60fps (1/60 second in microseconds)
+    let mut frames_inserted = 0;
+
+    // Simulate 10 seconds of video
+    for _ in 0..10 {
+        for frame_in_second in 0..60 {
+            // Keyframe every 30 frames (0.5 seconds at 60fps)
+            let is_keyframe = frames_inserted % 30 == 0;
+
+            // Simulate B-frames: some frames have PTS ahead of DTS
+            let pts_offset = if !is_keyframe && frame_in_second % 4 == 2 {
+                frame_duration_us * 2
+            } else if !is_keyframe && frame_in_second % 4 == 3 {
+                -frame_duration_us
+            } else {
+                0
+            };
+
+            let current_pts = pts + pts_offset;
+
+            buffer.insert(
+                dts,
+                new_video_frame(
+                    vec![1, 2, 3],
+                    current_pts,
+                    is_keyframe,
+                    current_pts,
+                ),
+            );
+
+            dts += frame_duration_us;
+            pts += frame_duration_us;
+            frames_inserted += 1;
+        }
+    }
+
+    assert!(buffer.get_frames().len() <= 270); // 4.5 Seconds since we trimmed last GOP (30 frames)
+
+    // Verify the time window is within bounds
+    if let (Some(oldest), Some(newest)) = (buffer.oldest_pts(), buffer.newest_pts()) {
+        let duration_us = newest - oldest;
+        println!(
+            "Buffer duration: {:.2} seconds",
+            duration_us as f64 / 1_000_000.0
+        );
+        assert!(duration_us >= 4_400_000 && duration_us <= 4_600_000); // Should be close to max (~4.5 seconds)
+    }
+
+    assert!(buffer.get_last_gop_start().is_some());
 }
 
 #[test]

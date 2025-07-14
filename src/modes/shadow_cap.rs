@@ -49,6 +49,8 @@ impl AppMode for ShadowCapMode {
     async fn on_save(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
         ctx.saving.store(true, std::sync::atomic::Ordering::Release);
         ctx.capture.finish()?;
+        log::info!("Saving clip...");
+
         let (mut video_buffer, mut audio_buffer) =
             tokio::join!(self.video_buffer.lock(), self.audio_buffer.lock());
         let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
@@ -61,7 +63,8 @@ impl AppMode for ShadowCapMode {
         ctx.saving
             .store(false, std::sync::atomic::Ordering::Release);
         ctx.capture.start()?;
-        log::debug!("Done saving!");
+
+        log::info!("Done saving!");
         Ok(())
     }
 
@@ -99,13 +102,16 @@ impl ShadowCapMode {
     ) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || loop {
             if stop.load(std::sync::atomic::Ordering::Acquire) {
+                while recv.try_recv().is_ok() {} // Drain any remaining frames to avoid error
+                                                 // logging
                 break;
             }
 
             while let Ok(encoded_frame) = recv.try_recv() {
-                buffer
-                    .blocking_lock()
-                    .insert(encoded_frame.dts, encoded_frame);
+                // Still receive but discard any frames received if we cannot acquire the lock
+                if let Ok(mut buf) = buffer.try_lock() {
+                    buf.insert(encoded_frame.dts, encoded_frame);
+                }
             }
 
             std::thread::sleep(Duration::from_millis(100));
@@ -119,13 +125,17 @@ impl ShadowCapMode {
     ) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || loop {
             if stop.load(std::sync::atomic::Ordering::Acquire) {
+                while recv.try_recv().is_ok() {} // Drain any remaining frames to avoid error
+                                                 // logging
                 break;
             }
 
             while let Ok(encoded_frame) = recv.try_recv() {
-                let mut audio_buf = audio_buffer.blocking_lock();
-                audio_buf.insert_capture_time(encoded_frame.timestamp);
-                audio_buf.insert(encoded_frame.pts, encoded_frame.data);
+                // Still receive but discard any frames received if we cannot acquire the lock
+                if let Ok(mut buf) = audio_buffer.try_lock() {
+                    buf.insert_capture_time(encoded_frame.timestamp);
+                    buf.insert(encoded_frame.pts, encoded_frame.data);
+                }
             }
 
             std::thread::sleep(Duration::from_millis(100));

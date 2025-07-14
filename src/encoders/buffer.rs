@@ -2,6 +2,39 @@ use std::collections::BTreeMap;
 
 use waycap_rs::types::video_frame::EncodedVideoFrame;
 
+/// Represents a time window between Presentation Time Stamps.
+/// Used in Shadow Buffers to cache
+struct TimeWindow {
+    min_time: Option<i64>,
+    max_time: Option<i64>,
+}
+
+impl TimeWindow {
+    pub fn new() -> Self {
+        Self {
+            min_time: None,
+            max_time: None,
+        }
+    }
+
+    pub fn insert_time(&mut self, time: i64) {
+        self.min_time = Some(self.min_time.map_or(time, |min| min.min(time)));
+        self.max_time = Some(self.max_time.map_or(time, |max| max.max(time)));
+    }
+
+    pub fn get_elapsed(&self) -> Option<i64> {
+        match (self.min_time, self.max_time) {
+            (Some(min), Some(max)) => Some(max - min),
+            _ => None,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.min_time = None;
+        self.max_time = None;
+    }
+}
+
 /// Rolling buffer which holds up to the last `max_time` seconds of video frames.
 ///
 /// The buffer is ordered by decoding timestamp (DTS) and maintains complete GOPs (groups of pictures),
@@ -16,6 +49,9 @@ pub struct ShadowCaptureVideoBuffer {
     /// List of DTS values corresponding to key frames, ordered by insertion.
     /// Used to identify GOP boundaries for trimming purposes.
     key_frame_keys: Vec<i64>,
+
+    /// Cached time window. Updated every call to `trim_oldest_gop()`
+    time_window: TimeWindow,
 }
 
 impl ShadowCaptureVideoBuffer {
@@ -29,6 +65,7 @@ impl ShadowCaptureVideoBuffer {
             frames: BTreeMap::new(),
             max_time,
             key_frame_keys: Vec::new(),
+            time_window: TimeWindow::new(),
         }
     }
 
@@ -46,30 +83,20 @@ impl ShadowCaptureVideoBuffer {
             self.key_frame_keys.push(timestamp);
         }
 
+        self.time_window.insert_time(frame.pts);
         self.frames.insert(timestamp, frame);
 
         // Trim old GOPs if buffer exceeds max_time
-        while let (Some(oldest), Some(newest)) = (self.oldest_pts(), self.newest_pts()) {
-            if newest - oldest >= self.max_time as i64 {
-                self.trim_oldest_gop();
-            } else {
-                break;
+        match self.time_window.get_elapsed() {
+            Some(elapsed) => {
+                if elapsed >= self.max_time as i64 {
+                    self.trim_oldest_gop();
+                }
+            }
+            None => {
+                log::warn!("Time window imporperly set");
             }
         }
-    }
-
-    /// Returns the presentation timestamp (PTS) of the newest frame in the buffer.
-    ///
-    /// Returns `None` if the buffer is empty.
-    pub fn newest_pts(&self) -> Option<i64> {
-        self.frames.values().map(|frame| frame.pts).max()
-    }
-
-    /// Returns the presentation timestamp (PTS) of the oldest frame in the buffer.
-    ///
-    /// Returns `None` if the buffer is empty.
-    pub fn oldest_pts(&self) -> Option<i64> {
-        self.frames.values().map(|frame| frame.pts).min()
     }
 
     /// Returns the decoding timestamp (DTS) of the most recent key frame (start of the last GOP).
@@ -94,17 +121,29 @@ impl ShadowCaptureVideoBuffer {
 
         let stop_dts = self.key_frame_keys[1]; // First complete GOP ends at second key frame
 
-        let mut dts_to_remove = Vec::new();
-        for (&pts, _) in self.frames.range(..stop_dts) {
-            dts_to_remove.push(pts);
-        }
-
-        for dts in dts_to_remove {
-            self.frames.remove(&dts);
-        }
+        self.frames.retain(|&dts, _| dts >= stop_dts);
 
         // Remove deleted key frame
         self.key_frame_keys.remove(0);
+        self.recalculate_pts();
+    }
+
+    #[cfg(test)]
+    pub fn oldest_pts(&self) -> Option<i64> {
+        self.time_window.min_time
+    }
+
+    #[cfg(test)]
+    pub fn newest_pts(&self) -> Option<i64> {
+        self.time_window.max_time
+    }
+
+    fn recalculate_pts(&mut self) {
+        self.time_window.reset();
+
+        for frame in self.frames.values() {
+            self.time_window.insert_time(frame.pts);
+        }
     }
 
     pub fn get_frames(&self) -> &BTreeMap<i64, EncodedVideoFrame> {
