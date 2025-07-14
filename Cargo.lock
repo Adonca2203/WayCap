@@ -2956,9 +2956,9 @@ dependencies = [
 
 [[package]]
 name = "waycap-rs"
-version = "1.0.2"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2683ad730f668866f3c672b4652e1d6ee300e9f26cf6da42912cbf0d6907b60e"
+checksum = "db71789090139f6e724524954eb7cd37ab7aacdd020858b3a58f510f3ea0559d"
 dependencies = [
  "bytemuck",
  "crossbeam",

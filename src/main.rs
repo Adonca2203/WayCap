@@ -17,7 +17,7 @@ use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
 use encoders::buffer::{ShadowCaptureAudioBuffer, ShadowCaptureVideoBuffer};
 use ffmpeg_next::{self as ffmpeg};
-use modes::shadow_cap::ShadowCapMode;
+use modes::{app_mode_variant::AppModeVariant, shadow_cap::ShadowCapMode};
 use pipewire::{self as pw};
 use waycap::WayCap;
 use waycap_rs::Capture;
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Error> {
     ffmpeg::init()?;
     let config = load_or_create_config();
     log::debug!("Config: {config:?}");
-    let mode = ShadowCapMode::new(config.max_seconds).await?;
+    let mode = AppModeVariant::Shadow(ShadowCapMode::new(config.max_seconds).await?);
 
     let mut app = WayCap::new(mode, config).await?;
 
