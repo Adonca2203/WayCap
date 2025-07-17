@@ -153,6 +153,7 @@ impl ShadowCaptureVideoBuffer {
     pub fn reset(&mut self) {
         self.frames.clear();
         self.key_frame_keys.clear();
+        self.time_window.reset();
     }
 }
 
