@@ -26,7 +26,7 @@ pub enum EncoderToUse {
 #[serde(default)]
 pub struct AppConfig {
     pub encoder: EncoderToUse,
-    pub max_seconds: u32,
+    pub max_seconds: u64,
     pub use_mic: bool,
     pub quality: QualityPreset,
 }
@@ -45,7 +45,7 @@ impl Default for AppConfig {
 #[derive(Type, Serialize, Deserialize)]
 pub struct AppConfigDbus {
     pub encoder: String,
-    pub max_seconds: u32,
+    pub max_seconds: u64,
     pub use_mic: bool,
     pub quality: String,
 }
@@ -93,6 +93,7 @@ impl TryFrom<AppConfigDbus> for AppConfig {
 #[derive(Type, Serialize, Deserialize, PartialEq)]
 pub enum AppModeDbus {
     Shadow,
+    Record,
 }
 
 pub fn load_or_create_config() -> AppConfig {

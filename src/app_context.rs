@@ -9,4 +9,5 @@ pub struct AppContext {
     pub join_handles: Vec<std::thread::JoinHandle<()>>,
     pub capture: Capture,
     pub config: AppConfig,
+    pub hint: String,
 }

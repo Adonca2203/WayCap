@@ -2,7 +2,10 @@ use crate::{
     app_context::AppContext,
     application_config::{update_config, AppConfig, AppModeDbus},
     dbus,
-    modes::{app_mode_variant::AppModeVariant, shadow_cap::ShadowCapMode, AppMode},
+    modes::{
+        app_mode_variant::AppModeVariant, record_mode::RecordMode, shadow_cap::ShadowCapMode,
+        AppMode,
+    },
 };
 use anyhow::Result;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -20,7 +23,11 @@ pub struct WayCap {
 }
 
 impl WayCap {
-    pub async fn new(mut mode: AppModeVariant, config: AppConfig) -> Result<Self> {
+    pub async fn new(
+        mut mode: AppModeVariant,
+        config: AppConfig,
+        file_hint: Option<String>,
+    ) -> Result<Self> {
         simple_logging::log_to_file("logs.txt", log::LevelFilter::Info)?;
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -58,6 +65,7 @@ impl WayCap {
             join_handles,
             capture,
             config,
+            hint: file_hint.unwrap_or("".to_string()),
         };
 
         mode.init(&mut ctx).await?;
@@ -78,6 +86,15 @@ impl WayCap {
                 _ = self.dbus_save_rx.recv() => {
                     log::debug!("Saving...");
                     self.mode.on_save(&mut self.context).await?;
+                    match self.mode {
+                        // Auto close the application once done saving a recording to avoid hanging
+                        // and doing nothing
+                        AppModeVariant::Record(_) => {
+                            self.mode.on_exit(&mut self.context).await?;
+                            break;
+                        },
+                        _ => {}
+                    }
                 },
                 Some(cfg) = self.dbus_config_rx.recv() => {
                     update_config(cfg);
@@ -87,7 +104,7 @@ impl WayCap {
                 },
                 _ = tokio::signal::ctrl_c() => {
                     log::debug!("Shutting down");
-                    self.mode.on_shutdown(&mut self.context).await?;
+                    self.mode.on_exit(&mut self.context).await?;
                     break;
                 }
             }
@@ -122,6 +139,7 @@ impl WayCap {
             AppModeDbus::Shadow => {
                 AppModeVariant::Shadow(ShadowCapMode::new(self.context.config.max_seconds).await?)
             }
+            AppModeDbus::Record => AppModeVariant::Record(RecordMode::new().await),
         };
 
         log::info!("Initializing {mode:?}");
