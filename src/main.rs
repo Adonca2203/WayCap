@@ -21,7 +21,7 @@ use ffmpeg_next::{self as ffmpeg};
 use modes::{app_mode_variant::AppModeVariant, record_mode::RecordMode, shadow_cap::ShadowCapMode};
 use pipewire::{self as pw};
 use waycap::WayCap;
-use waycap_rs::Capture;
+use waycap_rs::{Capture, DynamicEncoder};
 
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
@@ -68,7 +68,7 @@ fn save_buffer(
     filename: &str,
     video_buffer: &ShadowCaptureVideoBuffer,
     audio_buffer: &ShadowCaptureAudioBuffer,
-    capture: &Capture,
+    capture: &Capture<DynamicEncoder>,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
 

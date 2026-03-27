@@ -28,7 +28,7 @@ impl WayCap {
         config: AppConfig,
         file_hint: Option<String>,
     ) -> Result<Self> {
-        simple_logging::log_to_file("logs.txt", log::LevelFilter::Info)?;
+        simple_logging::log_to_file("logs.txt", log::LevelFilter::Debug)?;
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let join_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
@@ -86,14 +86,11 @@ impl WayCap {
                 _ = self.dbus_save_rx.recv() => {
                     log::debug!("Saving...");
                     self.mode.on_save(&mut self.context).await?;
-                    match self.mode {
+                    if let AppModeVariant::Record(_) = self.mode {
                         // Auto close the application once done saving a recording to avoid hanging
                         // and doing nothing
-                        AppModeVariant::Record(_) => {
-                            self.mode.on_exit(&mut self.context).await?;
-                            break;
-                        },
-                        _ => {}
+                        self.mode.on_exit(&mut self.context).await?;
+                        break;
                     }
                 },
                 Some(cfg) = self.dbus_config_rx.recv() => {

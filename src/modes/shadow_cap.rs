@@ -76,7 +76,7 @@ impl AppMode for ShadowCapMode {
     async fn on_exit(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
         // Stop worker threads and wait for them to exit
         ctx.stop.store(true, std::sync::atomic::Ordering::Release);
-        ctx.capture.pause()?;
+        ctx.capture.controls().pause();
         for worker in self.shadow_workers.drain(..) {
             match worker.join() {
                 Ok(_) => {}

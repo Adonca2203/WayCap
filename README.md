@@ -69,7 +69,9 @@ cargo build
 ## Usage Guide
 You can run the application as a debug build via
 ```
-cargo run
+MODE= # shadow or record
+FILE_HINT= # string to be prefixed to file name
+cargo run -- -m $MODE -f $FILE_HINT
 ```
 from within your cloned project's directory.
 

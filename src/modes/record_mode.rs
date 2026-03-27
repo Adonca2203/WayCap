@@ -192,7 +192,7 @@ impl AppMode for RecordMode {
     async fn on_save(&mut self, ctx: &mut crate::app_context::AppContext) -> anyhow::Result<()> {
         ctx.saving.store(true, std::sync::atomic::Ordering::Release);
         ctx.stop.store(true, std::sync::atomic::Ordering::Release);
-        ctx.capture.pause()?;
+        ctx.capture.controls().pause();
 
         if let Some(handle) = self.writer_handle.take() {
             match handle.join() {
@@ -209,7 +209,7 @@ impl AppMode for RecordMode {
 
     async fn on_exit(&mut self, ctx: &mut crate::app_context::AppContext) -> anyhow::Result<()> {
         ctx.stop.store(true, std::sync::atomic::Ordering::Release);
-        ctx.capture.pause()?;
+        ctx.capture.controls().pause();
 
         if let Some(handle) = self.writer_handle.take() {
             match handle.join() {
