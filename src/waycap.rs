@@ -28,7 +28,7 @@ impl WayCap {
         config: AppConfig,
         file_hint: Option<String>,
     ) -> Result<Self> {
-        simple_logging::log_to_file("logs.txt", log::LevelFilter::Debug)?;
+        simple_logging::log_to_file("logs.txt", log::LevelFilter::Info)?;
         let saving = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let join_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
