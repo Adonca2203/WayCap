@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use waycap_rs::types::video_frame::EncodedVideoFrame;
 
 /// Represents a time window between Presentation Time Stamps.
-/// Used in Shadow Buffers to cache
+/// Used in Shadow Buffers to cache timestamps for faster lookups
 struct TimeWindow {
     min_time: Option<i64>,
     max_time: Option<i64>,

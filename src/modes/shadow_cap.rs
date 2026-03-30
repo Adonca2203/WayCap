@@ -16,6 +16,9 @@ use crate::{
 
 use super::AppMode;
 
+/// 24 Hours in Nano Secods
+const MAX_TIME: u64 = 86400 * 1_000_000_000;
+
 pub struct ShadowCapMode {
     video_buffer: Arc<Mutex<ShadowCaptureVideoBuffer>>,
     audio_buffer: Arc<Mutex<ShadowCaptureAudioBuffer>>,
@@ -55,7 +58,7 @@ impl AppMode for ShadowCapMode {
 
         let (mut video_buffer, mut audio_buffer) =
             tokio::join!(self.video_buffer.lock(), self.audio_buffer.lock());
-        let filename = format!("clip_{}.mp4", chrono::Local::now().timestamp());
+        let filename = format!("{}_clip_{}.mp4", ctx.hint, chrono::Local::now().timestamp());
 
         save_buffer(&filename, &video_buffer, &audio_buffer, &ctx.capture)?;
 
@@ -70,17 +73,10 @@ impl AppMode for ShadowCapMode {
         Ok(())
     }
 
-    async fn on_shutdown(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
-        log::info!("Shutting down");
-        // Stop processing new frames and exit worker threads
-        ctx.stop.store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
-    }
-
     async fn on_exit(&mut self, ctx: &mut AppContext) -> anyhow::Result<()> {
         // Stop worker threads and wait for them to exit
         ctx.stop.store(true, std::sync::atomic::Ordering::Release);
-        ctx.capture.pause()?;
+        ctx.capture.controls().pause();
         for worker in self.shadow_workers.drain(..) {
             match worker.join() {
                 Ok(_) => {}
@@ -89,18 +85,23 @@ impl AppMode for ShadowCapMode {
                 }
             }
         }
+        self.video_buffer.lock().await.reset();
+
+        self.audio_buffer.lock().await.reset();
+
         Ok(())
     }
 }
 
 impl ShadowCapMode {
-    pub async fn new(max_seconds: u32) -> anyhow::Result<Self> {
+    pub async fn new(max_seconds: u64) -> anyhow::Result<Self> {
         anyhow::ensure!(
-            max_seconds <= 86400,
+            max_seconds <= MAX_TIME,
             "Max seconds is above 24 hours. This is too much time for shadow capture"
         );
 
-        let actual_max = max_seconds * 1_000_000_u32;
+        // Timestamps are nano seconds now
+        let actual_max = max_seconds * 1_000_000_000_u64;
         Ok(Self {
             video_buffer: Arc::new(Mutex::new(ShadowCaptureVideoBuffer::new(
                 actual_max as usize,
@@ -108,7 +109,7 @@ impl ShadowCapMode {
             audio_buffer: Arc::new(Mutex::new(ShadowCaptureAudioBuffer::new(
                 actual_max as usize,
             ))),
-            shadow_workers: Vec::new(),
+            shadow_workers: Vec::with_capacity(2),
         })
     }
 

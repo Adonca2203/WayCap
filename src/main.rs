@@ -15,27 +15,49 @@ mod waycap;
 
 use anyhow::{Context, Error, Result};
 use application_config::load_or_create_config;
+use clap::{Parser, ValueEnum};
 use encoders::buffer::{ShadowCaptureAudioBuffer, ShadowCaptureVideoBuffer};
 use ffmpeg_next::{self as ffmpeg};
-use modes::{app_mode_variant::AppModeVariant, shadow_cap::ShadowCapMode};
+use modes::{app_mode_variant::AppModeVariant, record_mode::RecordMode, shadow_cap::ShadowCapMode};
 use pipewire::{self as pw};
 use waycap::WayCap;
-use waycap_rs::Capture;
+use waycap_rs::{Capture, DynamicEncoder};
 
 const VIDEO_STREAM: usize = 0;
 const AUDIO_STREAM: usize = 1;
 
-pub struct Terminate;
+#[derive(Debug, Clone, ValueEnum)]
+enum AppModes {
+    Record,
+    Shadow,
+}
+
+#[derive(Parser, Debug)]
+struct Args {
+    /// Mode to use for the recording
+    #[arg(short, long, value_enum)]
+    mode: AppModes,
+    /// Identifier for the saved file.
+    /// The file hint is prepended to the generated file name
+    #[arg(short, long)]
+    file_hint: Option<String>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    pw::init();
-    ffmpeg::init()?;
     let config = load_or_create_config();
     log::debug!("Config: {config:?}");
-    let mode = AppModeVariant::Shadow(ShadowCapMode::new(config.max_seconds).await?);
+    let args = Args::parse();
 
-    let mut app = WayCap::new(mode, config).await?;
+    let mode = match args.mode {
+        AppModes::Record => AppModeVariant::Record(RecordMode::new().await),
+        AppModes::Shadow => AppModeVariant::Shadow(ShadowCapMode::new(config.max_seconds).await?),
+    };
+
+    pw::init();
+    ffmpeg::init()?;
+
+    let mut app = WayCap::new(mode, config, args.file_hint).await?;
 
     app.run().await?;
     log::debug!("Shutdown successfully");
@@ -46,7 +68,7 @@ fn save_buffer(
     filename: &str,
     video_buffer: &ShadowCaptureVideoBuffer,
     audio_buffer: &ShadowCaptureAudioBuffer,
-    capture: &Capture,
+    capture: &Capture<DynamicEncoder>,
 ) -> Result<()> {
     let mut output = ffmpeg::format::output(&filename)?;
 
