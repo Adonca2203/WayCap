@@ -1,6 +1,6 @@
 use crate::{
     app_context::AppContext,
-    application_config::{update_config, AppConfig, AppModeDbus},
+    application_config::{update_config, AppConfig, AppModeDbus, EncoderToUse, QualityPreset},
     dbus,
     modes::{
         app_mode_variant::AppModeVariant, record_mode::RecordMode, shadow_cap::ShadowCapMode,
@@ -10,7 +10,12 @@ use crate::{
 use anyhow::Result;
 use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::mpsc;
-use waycap_rs::pipeline::builder::CaptureBuilder;
+use waycap_rs::{
+    pipeline::builder::CaptureBuilder,
+    types::config::{
+        QualityPreset as WaycapQuality, VideoEncoder as WaycapEncoder,
+    },
+};
 use zbus::{connection, Connection};
 
 pub struct WayCap {
@@ -51,10 +56,23 @@ impl WayCap {
             .build()
             .await?;
 
+        let video_encoder = match config.encoder {
+            EncoderToUse::H264Vaapi => WaycapEncoder::H264Vaapi,
+            EncoderToUse::H264Nvenc => WaycapEncoder::H264Nvenc,
+        };
+
+        let quality = match config.quality {
+            QualityPreset::Low => WaycapQuality::Low,
+            QualityPreset::Medium => WaycapQuality::Medium,
+            QualityPreset::High => WaycapQuality::High,
+            QualityPreset::Ultra => WaycapQuality::Ultra,
+        };
+
         let mut capture = CaptureBuilder::new()
             .with_audio()
-            .with_quality_preset(waycap_rs::types::config::QualityPreset::Medium)
+            .with_quality_preset(quality)
             .with_cursor_shown()
+            .with_video_encoder(video_encoder)
             .with_audio_encoder(waycap_rs::types::config::AudioEncoder::Opus)
             .build()?;
 
