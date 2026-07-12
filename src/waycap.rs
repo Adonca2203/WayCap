@@ -12,9 +12,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::mpsc;
 use waycap_rs::{
     pipeline::builder::CaptureBuilder,
-    types::config::{
-        QualityPreset as WaycapQuality, VideoEncoder as WaycapEncoder,
-    },
+    types::config::{QualityPreset as WaycapQuality, VideoEncoder as WaycapEncoder},
 };
 use zbus::{connection, Connection};
 

@@ -17,7 +17,7 @@ simple-logging = "2.0.2"
 tokio = { version = "1.43.0", features = ["full"] }
 toml = "0.8.20"
 zbus = { version = "5.3.1", features = ["tokio"] }
-waycap-rs = { version = "3.0.0", features = ["vaapi", "nvidia", "vulkan"] }
+waycap-rs = { version = "3.0.0", features = ["nvidia", "vulkan"] }
 crossbeam = "0.8.4"
 clap = { version = "4.5.45", features = ["derive"] }
 

@@ -157,8 +157,8 @@ fn save_buffer(
         if audio_capture_timestamps[iter] < first_pts_offset {
             log::debug!(
                 "Skipping Audio Frame due to capture time being: {:?} while first video pts is: {:?} pts: {:?}",
-                &audio_capture_timestamps[iter],
-                &first_pts_offset,
+                audio_capture_timestamps[iter],
+                first_pts_offset,
                 pts
             );
             iter += 1;
